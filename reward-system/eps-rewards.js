@@ -842,38 +842,62 @@ router.get('/bi-weekly-categories', async (req, res) => {
   }
 });
 
-// Get driver risk assessment (like C# ExecutiveDashboard)
+// Get overall risk score for insurance
 router.get('/driver-risk-assessment', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('eps_driver_rewards')
-      .select('driver_name, plate, current_level, current_points, violations_count, last_updated')
+      .select('*')
       .order('current_points', { ascending: true });
     
     if (error) throw error;
     
-    // Calculate risk categories based on points (inverted - lower points = higher risk)
-    const driversWithRisk = data.map(driver => ({
-      ...driver,
-      risk_tier: driver.current_level,
-      total_risk_score: 100 - driver.current_points, // Invert points to risk score
-      risk_category: driver.current_points >= 80 ? 'Low Risk' : 
-                    driver.current_points >= 60 ? 'Medium Risk' : 'High Risk'
-    }));
+    // Calculate comprehensive risk score for insurance
+    const driversWithRisk = data.map(driver => {
+      const totalViolations = (driver.speed_violations_count || 0) + 
+                             (driver.harsh_braking_count || 0) + 
+                             (driver.night_driving_count || 0);
+      
+      // Insurance risk factors (0-100, higher = more risk)
+      const pointsRisk = 100 - driver.current_points; // 0-100
+      const violationRisk = Math.min(totalViolations * 5, 50); // Max 50 points
+      const speedRisk = Math.min((driver.speed_violations_count || 0) * 10, 30); // Max 30 points
+      const nightRisk = Math.min((driver.night_driving_count || 0) * 8, 20); // Max 20 points
+      
+      const overallRiskScore = Math.round(pointsRisk + violationRisk + speedRisk + nightRisk);
+      
+      return {
+        driver_name: driver.driver_name,
+        plate: driver.plate,
+        current_points: driver.current_points,
+        current_level: driver.current_level,
+        total_violations: totalViolations,
+        speed_violations: driver.speed_violations_count || 0,
+        night_violations: driver.night_driving_count || 0,
+        harsh_braking: driver.harsh_braking_count || 0,
+        overall_risk_score: Math.min(overallRiskScore, 200), // Cap at 200
+        risk_category: overallRiskScore <= 30 ? 'Low Risk' : 
+                      overallRiskScore <= 70 ? 'Medium Risk' : 'High Risk',
+        insurance_multiplier: overallRiskScore <= 30 ? 1.0 : 
+                             overallRiskScore <= 70 ? 1.3 : 1.8
+      };
+    });
     
     const totalDrivers = driversWithRisk.length;
-    const averageRiskScore = totalDrivers > 0 ? 
-      Math.round(driversWithRisk.reduce((sum, driver) => sum + driver.total_risk_score, 0) / totalDrivers) : 0;
+    const fleetRiskScore = totalDrivers > 0 ? 
+      Math.round(driversWithRisk.reduce((sum, d) => sum + d.overall_risk_score, 0) / totalDrivers) : 0;
     
     res.json({
-      overall_risk_score: averageRiskScore,
+      fleet_overall_risk_score: fleetRiskScore,
       total_drivers: totalDrivers,
       risk_distribution: {
         low_risk: driversWithRisk.filter(d => d.risk_category === 'Low Risk').length,
         medium_risk: driversWithRisk.filter(d => d.risk_category === 'Medium Risk').length,
         high_risk: driversWithRisk.filter(d => d.risk_category === 'High Risk').length
       },
-      drivers: driversWithRisk
+      average_insurance_multiplier: totalDrivers > 0 ? 
+        (driversWithRisk.reduce((sum, d) => sum + d.insurance_multiplier, 0) / totalDrivers).toFixed(2) : 1.0,
+      drivers: driversWithRisk.sort((a, b) => b.overall_risk_score - a.overall_risk_score)
     });
   } catch (error) {
     console.error('Error getting risk assessment:', error);
@@ -881,27 +905,72 @@ router.get('/driver-risk-assessment', async (req, res) => {
   }
 });
 
-// Get monthly incident criteria (like C# DriverMonitoringMvDriverCriteria)
+// Get monthly event counts (penalties)
 router.get('/monthly-incident-criteria', async (req, res) => {
   try {
-    // TODO: Reimplement with Supabase
-    res.status(501).json({ 
-      error: 'Feature temporarily unavailable',
-      message: 'Monthly incident criteria endpoint needs Supabase migration'
-    });
+    const { data, error } = await supabase
+      .from('eps_driver_rewards')
+      .select('*');
+    
+    if (error) throw error;
+    
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
+    
+    // Calculate monthly totals
+    const monthlyStats = {
+      period: currentMonth,
+      total_drivers: data.length,
+      penalty_events: {
+        speed_violations: data.reduce((sum, d) => sum + (d.speed_violations_count || 0), 0),
+        harsh_braking: data.reduce((sum, d) => sum + (d.harsh_braking_count || 0), 0),
+        night_driving: data.reduce((sum, d) => sum + (d.night_driving_count || 0), 0),
+        total_penalties: data.reduce((sum, d) => sum + 
+          (d.speed_violations_count || 0) + 
+          (d.harsh_braking_count || 0) + 
+          (d.night_driving_count || 0), 0)
+      },
+      points_deducted: data.reduce((sum, d) => sum + (d.points_deducted || 0), 0),
+      drivers_affected: data.filter(d => (d.points_deducted || 0) > 0).length,
+      performance_levels: {
+        gold: data.filter(d => d.current_level === 'Gold').length,
+        silver: data.filter(d => d.current_level === 'Silver').length,
+        bronze: data.filter(d => d.current_level === 'Bronze').length,
+        critical: data.filter(d => d.current_level === 'Critical').length
+      }
+    };
+    
+    res.json(monthlyStats);
   } catch (error) {
     console.error('Error getting monthly incident criteria:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Get top worst performing drivers (like C# Top10WorstSpeedingDrivers30Days)
+// Get top 10 worst speeding drivers
 router.get('/top-worst-drivers', async (req, res) => {
   try {
-    // TODO: Reimplement with Supabase aggregation
-    res.status(501).json({ 
-      error: 'Feature temporarily unavailable',
-      message: 'Top worst drivers endpoint needs Supabase migration'
+    const { days = 30, limit = 10 } = req.query;
+    
+    const { data, error } = await supabase
+      .from('eps_driver_rewards')
+      .select('driver_name, speed_violations_count, current_points, current_level')
+      .order('speed_violations_count', { ascending: false })
+      .limit(parseInt(limit));
+    
+    if (error) throw error;
+    
+    const worstDrivers = data.map(driver => ({
+      name: driver.driver_name,
+      speed_violations: driver.speed_violations_count,
+      current_points: driver.current_points,
+      risk_level: driver.current_level,
+      criterion: 'Speed Violations'
+    }));
+    
+    res.json({
+      period: `Current standings`,
+      worst_drivers: worstDrivers
     });
   } catch (error) {
     console.error('Error getting worst drivers:', error);
@@ -909,7 +978,165 @@ router.get('/top-worst-drivers', async (req, res) => {
   }
 });
 
-// Get penalty cap information for a specific driver
+// Get all drivers with comprehensive profiles
+router.get('/all-driver-profiles', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('eps_driver_rewards')
+      .select('*')
+      .order('current_points', { ascending: false });
+    
+    if (error) throw error;
+    
+    const driverProfiles = data.map(driver => {
+      const totalViolations = (driver.speed_violations_count || 0) + 
+                             (driver.harsh_braking_count || 0) + 
+                             (driver.night_driving_count || 0);
+      
+      const performanceRating = Math.max(0, 100 - (totalViolations * 5) - (driver.points_deducted || 0));
+      
+      const pointsRisk = 100 - driver.current_points;
+      const violationRisk = Math.min(totalViolations * 5, 50);
+      const speedRisk = Math.min((driver.speed_violations_count || 0) * 10, 30);
+      const nightRisk = Math.min((driver.night_driving_count || 0) * 8, 20);
+      const insuranceRiskScore = Math.min(pointsRisk + violationRisk + speedRisk + nightRisk, 200);
+      
+      const riskCategory = insuranceRiskScore <= 30 ? 'Low Risk' : 
+                          insuranceRiskScore <= 70 ? 'Medium Risk' : 'High Risk';
+      
+      const insuranceMultiplier = insuranceRiskScore <= 30 ? 1.0 : 
+                                 insuranceRiskScore <= 70 ? 1.3 : 1.8;
+      
+      return {
+        driverName: driver.driver_name,
+        plate: driver.plate,
+        currentPoints: driver.current_points,
+        performanceLevel: driver.current_level,
+        scores: {
+          performanceRating: Math.round(performanceRating),
+          insuranceRiskScore: Math.round(insuranceRiskScore),
+          riskCategory: riskCategory,
+          insuranceMultiplier: parseFloat(insuranceMultiplier.toFixed(2))
+        },
+        violations: {
+          total: totalViolations,
+          speed: driver.speed_violations_count || 0,
+          harshBraking: driver.harsh_braking_count || 0,
+          nightDriving: driver.night_driving_count || 0
+        }
+      };
+    });
+    
+    res.json({
+      totalDrivers: driverProfiles.length,
+      drivers: driverProfiles
+    });
+  } catch (error) {
+    console.error('Error getting all driver profiles:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get comprehensive driver profile with scores and insurance info
+router.get('/driver-profile/:driverName', async (req, res) => {
+  try {
+    const { driverName } = req.params;
+    
+    // Get driver rewards data
+    const { data, error } = await supabase
+      .from('eps_driver_rewards')
+      .select('*')
+      .eq('driver_name', driverName)
+      .single();
+    
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({ error: 'Driver not found' });
+      }
+      throw error;
+    }
+    
+    // Calculate comprehensive scores
+    const totalViolations = (data.speed_violations_count || 0) + 
+                           (data.harsh_braking_count || 0) + 
+                           (data.night_driving_count || 0);
+    
+    // Performance Rating (0-100)
+    const performanceRating = Math.max(0, 100 - (totalViolations * 5) - (data.points_deducted || 0));
+    
+    // Insurance Risk Score (0-200)
+    const pointsRisk = 100 - data.current_points;
+    const violationRisk = Math.min(totalViolations * 5, 50);
+    const speedRisk = Math.min((data.speed_violations_count || 0) * 10, 30);
+    const nightRisk = Math.min((data.night_driving_count || 0) * 8, 20);
+    const insuranceRiskScore = Math.min(pointsRisk + violationRisk + speedRisk + nightRisk, 200);
+    
+    // Risk Category
+    const riskCategory = insuranceRiskScore <= 30 ? 'Low Risk' : 
+                        insuranceRiskScore <= 70 ? 'Medium Risk' : 'High Risk';
+    
+    // Insurance Multiplier
+    const insuranceMultiplier = insuranceRiskScore <= 30 ? 1.0 : 
+                               insuranceRiskScore <= 70 ? 1.3 : 1.8;
+    
+    const driverProfile = {
+      // Basic Info
+      driverName: data.driver_name,
+      plate: data.plate,
+      lastUpdated: data.last_updated,
+      
+      // Current Status
+      currentPoints: data.current_points,
+      pointsDeducted: data.points_deducted,
+      performanceLevel: data.current_level,
+      
+      // Scores
+      scores: {
+        performanceRating: Math.round(performanceRating),
+        insuranceRiskScore: Math.round(insuranceRiskScore),
+        riskCategory: riskCategory,
+        insuranceMultiplier: parseFloat(insuranceMultiplier.toFixed(2))
+      },
+      
+      // Violation Details
+      violations: {
+        total: totalViolations,
+        speed: data.speed_violations_count || 0,
+        harshBraking: data.harsh_braking_count || 0,
+        nightDriving: data.night_driving_count || 0,
+        route: data.route_violations_count || 0,
+        other: data.other_violations_count || 0
+      },
+      
+      // Threshold Status
+      thresholds: {
+        speedExceeded: data.speed_threshold_exceeded || false,
+        brakingExceeded: data.braking_threshold_exceeded || false,
+        nightExceeded: data.night_threshold_exceeded || false,
+        routeExceeded: data.route_threshold_exceeded || false,
+        otherExceeded: data.other_threshold_exceeded || false
+      },
+      
+      // Risk Breakdown
+      riskBreakdown: {
+        pointsRisk: Math.round(pointsRisk),
+        violationRisk: Math.round(violationRisk),
+        speedRisk: Math.round(speedRisk),
+        nightRisk: Math.round(nightRisk)
+      }
+    };
+    
+    res.json(driverProfile);
+  } catch (error) {
+    console.error('Error getting driver profile:', error);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      details: error.message
+    });
+  }
+});
+
+// Get penalty cap information for a specific driver (legacy endpoint)
 router.get('/penalty-cap/:driverName', async (req, res) => {
   try {
     const { driverName } = req.params;

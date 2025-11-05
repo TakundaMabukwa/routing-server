@@ -24,7 +24,7 @@ class EPSRewardSystem {
     // Batch update system
     this.pendingUpdates = new Map();
     this.batchTimer = null;
-    this.BATCH_INTERVAL = 30000; // 30 seconds
+    this.BATCH_INTERVAL = 60000; // 60 seconds
     
     // Daily snapshot timer
     this.setupDailySnapshot()
@@ -118,22 +118,20 @@ class EPSRewardSystem {
       const newPointsDeducted = (driver.points_deducted || 0) + pointsDeducted;
       const newLevel = this.calculateLevel(newPoints);
       
-      // Add to batch instead of immediate update
-      this.addToBatch(driverName, {
+      const updateData = {
         [violationField]: currentCount,
         [thresholdField]: thresholdExceeded,
         current_points: newPoints,
         points_deducted: newPointsDeducted,
         current_level: newLevel
-      });
+      };
+      
+      // IMMEDIATE update for violations, batch for regular updates
+      await this.updateDriverRewards(driverName, updateData);
       
       return {
         ...driver,
-        [violationField]: currentCount,
-        [thresholdField]: thresholdExceeded,
-        current_points: newPoints,
-        points_deducted: newPointsDeducted,
-        current_level: newLevel
+        ...updateData
       };
       
     } catch (error) {
@@ -812,8 +810,8 @@ class EPSRewardSystem {
     try {
       const currentDate = new Date(epsData.LocTime).toISOString().split('T')[0];
       
-      // Only update daily performance if there are violations or significant changes
-      if (violations.length > 0 || Math.random() < 0.1) { // 10% chance for non-violation updates
+      // Only update daily performance if there are violations or every 60 seconds
+      if (violations.length > 0 || Math.random() < 0.017) { // ~1.7% chance = 60 second average
         await supabase
           .from('eps_daily_performance')
           .upsert({
