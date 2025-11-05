@@ -8,7 +8,7 @@ const supabase = createClient(
 
 class EPSRewardSystem {
   constructor() {
-    this.serverTimeOffset = -2; // Server is 2 hours behind
+    this.serverTimeOffset = -1; // Server is 1 hour behind
     
     // New 100-point deduction system with thresholds
     this.STARTING_POINTS = 100;
@@ -546,9 +546,15 @@ class EPSRewardSystem {
       }
     }
 
-    // Night driving violations (10 PM to 6 AM)
-    const hour = new Date(epsData.LocTime).getHours();
-    if (hour >= 22 || hour <= 6) {
+    // Night driving violations (10 PM to 5 AM) - with timezone adjustment
+    const locTimeAdjusted = new Date(new Date(epsData.LocTime).getTime() + (this.serverTimeOffset * 60 * 60 * 1000));
+    const hour = locTimeAdjusted.getHours();
+    
+    // Debug logging for night driving detection
+    console.log(`🕐 Time Check - ${epsData.DriverName}: Original=${epsData.LocTime}, Adjusted=${locTimeAdjusted.toISOString()}, Hour=${hour}`);
+    
+    if (hour >= 22 || hour <= 5) {
+      console.log(`🌙 Night driving detected for ${epsData.DriverName} at hour ${hour}`);
       const driver = await this.processViolation(epsData.DriverName, plate, 'NIGHT_DRIVING');
       if (driver) {
         violations.push({
@@ -560,6 +566,8 @@ class EPSRewardSystem {
           points_remaining: driver.current_points
         });
       }
+    } else {
+      console.log(`☀️ Day driving - ${epsData.DriverName} at hour ${hour} (no violation)`);
     }
 
     // Route violations - DISABLED
@@ -677,8 +685,9 @@ class EPSRewardSystem {
   }
 
   isWithinWorkingHours(locTime) {
-    const hour = new Date(locTime).getHours();
-    return hour >= 6 && hour <= 22;
+    const locTimeAdjusted = new Date(new Date(locTime).getTime() + (this.serverTimeOffset * 60 * 60 * 1000));
+    const hour = locTimeAdjusted.getHours();
+    return hour >= 6 && hour <= 21;
   }
 
   calculateEfficiency(epsData) {
@@ -701,8 +710,9 @@ class EPSRewardSystem {
     }
     
     // Deduct for night driving
-    const hour = new Date(epsData.LocTime).getHours();
-    if (hour >= 22 || hour <= 6) {
+    const locTimeAdjusted = new Date(new Date(epsData.LocTime).getTime() + (this.serverTimeOffset * 60 * 60 * 1000));
+    const hour = locTimeAdjusted.getHours();
+    if (hour >= 22 || hour <= 5) {
       score -= 0.1;
     }
     
