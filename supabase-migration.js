@@ -21,6 +21,10 @@ class SupabaseEPSRewardSystem {
       ROUTE: 4,
       OTHER: 4
     };
+    
+    // Fuel data tracking - store once per hour per vehicle
+    this.lastFuelStorage = new Map();
+    this.FUEL_STORAGE_INTERVAL = 60 * 60 * 1000; // 1 hour
   }
 
   // Process violation and deduct points after threshold
@@ -238,6 +242,11 @@ class SupabaseEPSRewardSystem {
       
       if (error) throw error;
       
+      // Store fuel data hourly
+      if (epsData.fuel_level || epsData.fuel_volume) {
+        await this.storeFuelDataHourly(epsData);
+      }
+      
     } catch (error) {
       console.error('Error storing vehicle data:', error);
       throw error;
@@ -393,6 +402,53 @@ class SupabaseEPSRewardSystem {
     if (hour >= 22 || hour <= 6) score -= 0.1;
     
     return Math.max(0, score);
+  }
+
+  // Store fuel data for 5 minutes at the start of every hour (00:00-00:05)
+  async storeFuelDataHourly(epsData) {
+    try {
+      if (!epsData.fuel_level && !epsData.fuel_volume) {
+        return;
+      }
+      
+      const now = new Date();
+      const minutes = now.getMinutes();
+      
+      // Only store during first 5 minutes of each hour
+      if (minutes > 5) {
+        return;
+      }
+      
+      const plate = epsData.Plate;
+      const currentHour = now.getHours();
+      const lastStoredHour = this.lastFuelStorage.get(plate) || -1;
+      
+      // Only store once per hour during the 5-minute window
+      if (lastStoredHour === currentHour) {
+        return;
+      }
+      
+      const { error } = await this.supabase
+        .from('eps_fuel_data')
+        .insert({
+          plate: epsData.Plate,
+          driver_name: epsData.DriverName,
+          fuel_level: epsData.fuel_level,
+          fuel_volume: epsData.fuel_volume,
+          fuel_temperature: epsData.fuel_temperature,
+          fuel_percentage: epsData.fuel_percentage,
+          loc_time: epsData.LocTime || new Date().toISOString(),
+          latitude: epsData.Latitude,
+          longitude: epsData.Longitude
+        });
+      
+      if (error) throw error;
+      
+      this.lastFuelStorage.set(plate, currentHour);
+      console.log(`⛽ Stored fuel data for ${epsData.Plate} at ${currentHour}:${minutes.toString().padStart(2, '0')}`);
+    } catch (error) {
+      console.error('Error storing hourly fuel data:', error);
+    }
   }
 }
 

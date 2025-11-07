@@ -39,6 +39,28 @@ ws.on('message', async (data) => {
     
     console.log('Full data:', JSON.stringify(vehicleData, null, 2));
     
+    // Check for fuel data in various formats
+    const hasFuelData = vehicleData.fuel_level || vehicleData.fuel_volume || 
+                       vehicleData.FuelLevel || vehicleData.FuelVolume ||
+                       vehicleData.Fuel || vehicleData.fuel;
+    
+    if (hasFuelData) {
+      console.log(`⛽ Fuel Data - ${vehicleData.Plate}: Level=${vehicleData.fuel_level || vehicleData.FuelLevel}L, Volume=${vehicleData.fuel_volume || vehicleData.FuelVolume}L, Percentage=${vehicleData.fuel_percentage}%`);
+      try {
+        await rewardSystem.storeFuelDataHourly(vehicleData);
+      } catch (error) {
+        console.error('Error storing independent fuel data:', error);
+      }
+    } else {
+      // Log available fields to debug fuel data structure
+      const availableFields = Object.keys(vehicleData).filter(key => 
+        key.toLowerCase().includes('fuel') || key.toLowerCase().includes('tank')
+      );
+      if (availableFields.length > 0) {
+        console.log(`🔍 Potential fuel fields for ${vehicleData.Plate}:`, availableFields);
+      }
+    }
+    
     // Process through EPS reward system if driver name exists
     if (vehicleData.DriverName && vehicleData.Plate) {
       try {

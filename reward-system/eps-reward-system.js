@@ -26,6 +26,10 @@ class EPSRewardSystem {
     this.batchTimer = null;
     this.BATCH_INTERVAL = 60000; // 60 seconds
     
+    // Fuel data tracking - store once per hour per vehicle
+    this.lastFuelStorage = new Map(); // plate -> timestamp
+    this.FUEL_STORAGE_INTERVAL = 60 * 60 * 1000; // 1 hour in milliseconds
+    
     // Daily snapshot timer
     this.setupDailySnapshot()
   }
@@ -802,10 +806,10 @@ class EPSRewardSystem {
       
       console.log(`✅ Updated EPS driver: ${epsData.DriverName} -> ${Plate}`);
       
-      // Log fuel data if available
+      // Log and store fuel data if available (hourly)
       if (epsData.fuel_level || epsData.fuel_volume) {
         console.log(`⛽ EPS Fuel Data - ${epsData.DriverName}: Level=${epsData.fuel_level}L, Volume=${epsData.fuel_volume}L`);
-        await this.storeFuelData(epsData);
+        await this.storeFuelDataHourly(epsData);
       }
       
       return data?.[0]?.id;
@@ -867,6 +871,9 @@ class EPSRewardSystem {
           });
       }
 
+      // Store daily fuel summary
+      await this.storeDailyFuelSummary(epsData, currentDate);
+      
       // Skip daily stats updates to reduce database calls
       // Stats can be calculated from daily performance data when needed
 
@@ -918,23 +925,84 @@ class EPSRewardSystem {
     }
   }
 
-  // Store fuel data in dedicated fuel history table
-  async storeFuelData(epsData) {
+  // Core fuel calculations
+  calculateFuelMetrics(epsData, previousFuelData = null) {
+    const metrics = {
+      fuel_level: epsData.fuel_level || 0,
+      fuel_volume: epsData.fuel_volume || 0,
+      fuel_percentage: epsData.fuel_percentage || 0,
+      consumption_rate: 0,
+      efficiency_kmpl: 0,
+      fuel_cost: 0,
+      theft_detected: false
+    };
+
+    if (previousFuelData) {
+      const fuelUsed = (previousFuelData.fuel_level || 0) - (epsData.fuel_level || 0);
+      const distanceTraveled = (epsData.Mileage || 0) - (previousFuelData.mileage || 0);
+      const timeElapsed = new Date(epsData.LocTime) - new Date(previousFuelData.loc_time);
+      
+      // Fuel consumption rate (L/hour)
+      if (timeElapsed > 0) {
+        metrics.consumption_rate = (fuelUsed / (timeElapsed / 3600000)).toFixed(2);
+      }
+      
+      // Fuel efficiency (km/L)
+      if (fuelUsed > 0 && distanceTraveled > 0) {
+        metrics.efficiency_kmpl = (distanceTraveled / fuelUsed).toFixed(2);
+      }
+      
+      // Fuel theft detection (sudden drop > 20L)
+      if (fuelUsed > 20 && distanceTraveled < 5) {
+        metrics.theft_detected = true;
+      }
+      
+      // Fuel cost (assuming R20/L)
+      metrics.fuel_cost = (fuelUsed * 20).toFixed(2);
+    }
+
+    return metrics;
+  }
+
+  // Store fuel data hourly
+  async storeFuelDataHourly(epsData) {
     try {
       if (!epsData.fuel_level && !epsData.fuel_volume) {
         return;
       }
+      
+      const plate = epsData.Plate;
+      const now = Date.now();
+      const lastStored = this.lastFuelStorage.get(plate) || 0;
+      
+      // Only store once per hour
+      if (now - lastStored < this.FUEL_STORAGE_INTERVAL) {
+        return;
+      }
+      
+      // Get previous fuel data for calculations
+      const { data: previousData } = await supabase
+        .from('eps_fuel_data')
+        .select('*')
+        .eq('plate', plate)
+        .order('loc_time', { ascending: false })
+        .limit(1);
+      
+      const fuelMetrics = this.calculateFuelMetrics(epsData, previousData?.[0]);
       
       const { error } = await supabase
         .from('eps_fuel_data')
         .insert({
           plate: epsData.Plate,
           driver_name: epsData.DriverName,
-          fuel_level: epsData.fuel_level,
-          fuel_volume: epsData.fuel_volume,
-          fuel_temperature: epsData.fuel_temperature,
-          fuel_percentage: epsData.fuel_percentage,
-          engine_status: epsData.engine_status,
+          fuel_level: fuelMetrics.fuel_level,
+          fuel_volume: fuelMetrics.fuel_volume,
+          fuel_percentage: fuelMetrics.fuel_percentage,
+          consumption_rate: fuelMetrics.consumption_rate,
+          efficiency_kmpl: fuelMetrics.efficiency_kmpl,
+          fuel_cost: fuelMetrics.fuel_cost,
+          theft_detected: fuelMetrics.theft_detected,
+          mileage: epsData.Mileage,
           loc_time: epsData.LocTime || new Date().toISOString(),
           latitude: epsData.Latitude,
           longitude: epsData.Longitude
@@ -942,9 +1010,57 @@ class EPSRewardSystem {
       
       if (error) throw error;
       
-      console.log(`✅ Stored EPS fuel data for ${epsData.Plate}`);
+      // Update last storage time
+      this.lastFuelStorage.set(plate, now);
+      
+      if (fuelMetrics.theft_detected) {
+        console.log(`🚨 FUEL THEFT DETECTED - ${plate}: ${fuelMetrics.consumption_rate}L sudden drop`);
+      }
+      
+      console.log(`✅ Stored fuel data for ${epsData.Plate}: ${fuelMetrics.efficiency_kmpl} km/L, ${fuelMetrics.consumption_rate}L/h`);
     } catch (error) {
       console.error('Error storing EPS fuel data:', error);
+    }
+  }
+
+  // Store daily fuel summary
+  async storeDailyFuelSummary(epsData, date) {
+    try {
+      const { data: dailyFuel } = await supabase
+        .from('eps_fuel_data')
+        .select('*')
+        .eq('plate', epsData.Plate)
+        .gte('loc_time', `${date}T00:00:00`)
+        .lt('loc_time', `${date}T23:59:59`)
+        .order('loc_time');
+      
+      if (dailyFuel.length < 2) return;
+      
+      const startFuel = dailyFuel[0].fuel_level || 0;
+      const endFuel = dailyFuel[dailyFuel.length - 1].fuel_level || 0;
+      const totalConsumption = startFuel - endFuel;
+      const avgEfficiency = dailyFuel.reduce((sum, d) => sum + (parseFloat(d.efficiency_kmpl) || 0), 0) / dailyFuel.length;
+      const totalCost = dailyFuel.reduce((sum, d) => sum + (parseFloat(d.fuel_cost) || 0), 0);
+      const theftIncidents = dailyFuel.filter(d => d.theft_detected).length;
+      
+      await supabase
+        .from('eps_daily_fuel_summary')
+        .upsert({
+          plate: epsData.Plate,
+          driver_name: epsData.DriverName,
+          date: date,
+          start_fuel_level: startFuel,
+          end_fuel_level: endFuel,
+          total_consumption: totalConsumption,
+          average_efficiency: avgEfficiency.toFixed(2),
+          total_fuel_cost: totalCost.toFixed(2),
+          theft_incidents: theftIncidents,
+          last_update: new Date().toISOString()
+        }, {
+          onConflict: 'plate,date'
+        });
+    } catch (error) {
+      console.error('Error storing daily fuel summary:', error);
     }
   }
 
