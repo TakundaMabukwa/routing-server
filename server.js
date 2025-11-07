@@ -13,6 +13,8 @@ app.use(express.json());
 
 // Cache latest vehicle data
 const vehicleDataCache = new Map();
+// Cache latest fuel data separately for real-time access
+const fuelDataCache = new Map();
 
 // Initialize EPS Reward System
 const rewardSystem = new EPSRewardSystem();
@@ -39,25 +41,33 @@ ws.on('message', async (data) => {
     
     console.log('Full data:', JSON.stringify(vehicleData, null, 2));
     
-    // Check for fuel data in various formats
-    const hasFuelData = vehicleData.fuel_level || vehicleData.fuel_volume || 
-                       vehicleData.FuelLevel || vehicleData.FuelVolume ||
-                       vehicleData.Fuel || vehicleData.fuel;
+    // Parse and cache fuel data from rawMessage
+    let fuelData = null;
+    if (vehicleData.rawMessage) {
+      const parts = vehicleData.rawMessage.split('|');
+      const hexData = parts[parts.length - 1];
+      if (hexData && hexData.includes(',')) {
+        fuelData = rewardSystem.parseEPSFuelData(hexData);
+      }
+    }
     
-    if (hasFuelData) {
-      console.log(`⛽ Fuel Data - ${vehicleData.Plate}: Level=${vehicleData.fuel_level || vehicleData.FuelLevel}L, Volume=${vehicleData.fuel_volume || vehicleData.FuelVolume}L, Percentage=${vehicleData.fuel_percentage}%`);
+    if (fuelData) {
+      // Cache fresh fuel data for real-time access
+      fuelDataCache.set(vehicleData.Plate, {
+        ...fuelData,
+        plate: vehicleData.Plate,
+        timestamp: new Date().toISOString(),
+        location: {
+          latitude: vehicleData.Latitude,
+          longitude: vehicleData.Longitude
+        }
+      });
+      
+      // Store to database only once per hour
       try {
         await rewardSystem.storeFuelDataHourly(vehicleData);
       } catch (error) {
-        console.error('Error storing independent fuel data:', error);
-      }
-    } else {
-      // Log available fields to debug fuel data structure
-      const availableFields = Object.keys(vehicleData).filter(key => 
-        key.toLowerCase().includes('fuel') || key.toLowerCase().includes('tank')
-      );
-      if (availableFields.length > 0) {
-        console.log(`🔍 Potential fuel fields for ${vehicleData.Plate}:`, availableFields);
+        console.error('Error storing hourly fuel data:', error);
       }
     }
     
@@ -66,11 +76,11 @@ ws.on('message', async (data) => {
       try {
         const result = await rewardSystem.processEPSData(vehicleData);
         if (result) {
-          console.log(`📊 EPS Result for ${vehicleData.DriverName}:`, {
-            violations: result.violations.length,
-            points: result.driverScore.currentPoints,
-            level: result.driverScore.level
-          });
+          // console.log(`📊 EPS Result for ${vehicleData.DriverName}:`, {
+          //   violations: result.violations.length,
+          //   points: result.driverScore.currentPoints,
+          //   level: result.driverScore.level
+          // });
         }
       } catch (error) {
         console.error('Error processing EPS data:', error);
@@ -119,6 +129,22 @@ app.get('/vehicles', (req, res) => {
     ...data
   }));
   res.json(vehicles);
+});
+
+// Get real-time fuel data for Next.js app
+app.get('/fuel', (req, res) => {
+  const fuelData = Array.from(fuelDataCache.values());
+  res.json(fuelData);
+});
+
+// Get specific vehicle fuel data
+app.get('/fuel/:plate', (req, res) => {
+  const fuelData = fuelDataCache.get(req.params.plate);
+  if (fuelData) {
+    res.json(fuelData);
+  } else {
+    res.status(404).json({ error: 'No fuel data found for vehicle' });
+  }
 });
 
 app.listen(PORT, () => {

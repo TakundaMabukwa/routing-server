@@ -182,7 +182,7 @@ class EPSRewardSystem {
       
       const driver = data?.[0];
       if (driver) {
-        console.log(`✅ Driver ${driverName}: ${driver.current_points} points`);
+
       }
       return driver;
       
@@ -225,7 +225,7 @@ class EPSRewardSystem {
         this.updateDriverRewards(driverName, updateData)
       ));
       
-      console.log(`✅ Batch processed ${updates.length} driver updates`);
+
     } catch (error) {
       console.error('Error processing batch updates:', error);
     }
@@ -258,7 +258,7 @@ class EPSRewardSystem {
   // Reset all drivers to 100 points (monthly reset)
   async resetAllDriverPoints() {
     try {
-      console.log('Resetting all drivers to 100 points...');
+
       
       const { error } = await supabase
         .from('eps_driver_rewards')
@@ -282,7 +282,7 @@ class EPSRewardSystem {
 
       if (error) throw error;
       
-      console.log('All drivers reset to 100 points successfully');
+
       return true;
     } catch (error) {
       console.error('Error resetting driver points:', error);
@@ -309,7 +309,7 @@ class EPSRewardSystem {
       const isDriving = this.isVehicleDriving(epsData);
       
       if (!isDriving) {
-        console.log(`Vehicle ${plate} is not driving (Status: ${epsData.NameEvent}), skipping reward processing`);
+
         return null;
       }
 
@@ -555,10 +555,7 @@ class EPSRewardSystem {
     const hour = locTimeAdjusted.getHours();
     
     // Debug logging for night driving detection
-    console.log(`🕐 Time Check - ${epsData.DriverName}: Original=${epsData.LocTime}, Adjusted=${locTimeAdjusted.toISOString()}, Hour=${hour}`);
-    
     if (hour >= 22 || hour <= 5) {
-      console.log(`🌙 Night driving detected for ${epsData.DriverName} at hour ${hour}`);
       const driver = await this.processViolation(epsData.DriverName, plate, 'NIGHT_DRIVING');
       if (driver) {
         violations.push({
@@ -570,8 +567,6 @@ class EPSRewardSystem {
           points_remaining: driver.current_points
         });
       }
-    } else {
-      console.log(`☀️ Day driving - ${epsData.DriverName} at hour ${hour} (no violation)`);
     }
 
     // Route violations - DISABLED
@@ -764,14 +759,7 @@ class EPSRewardSystem {
       }
       
       // Log new name events
-      if (epsData.NameEvent && epsData.NameEvent !== previousNameEvent) {
-        console.log(`🔄 EPS Name Event Change - ${Plate}: "${previousNameEvent || 'NULL'}" → "${epsData.NameEvent}"`);
-      }
-      
-      // Log engine status changes
-      if (engineStatus && engineStatus !== previousEngineStatus) {
-        console.log(`🚗 EPS Engine Status Change - ${Plate}: ${previousEngineStatus || 'UNKNOWN'} → ${engineStatus} at ${epsData.LocTime}`);
-      }
+
       
       // Update existing driver record by driver_name
       const { data, error } = await supabase
@@ -804,7 +792,7 @@ class EPSRewardSystem {
         return null;
       }
       
-      console.log(`✅ Updated EPS driver: ${epsData.DriverName} -> ${Plate}`);
+
       
       // Log and store fuel data if available (hourly)
       if (epsData.fuel_level || epsData.fuel_volume) {
@@ -925,12 +913,56 @@ class EPSRewardSystem {
     }
   }
 
+  // Parse fuel data from last hex segment in rawMessage
+  parseEPSFuelData(hexMessage) {
+    if (!hexMessage || hexMessage.trim() === '') return null;
+    
+    const parts = hexMessage.split(',');
+    if (parts.length < 11) return null;
+    
+    try {
+      // Use EnergyRite structure: positions 4,6,8,10 for hex fuel data
+      const levelHex = parts[4];      
+      const volumeHex = parts[6];     
+      const tempHex = parts[8];       
+      const percentHex = parts[10];   
+      
+      console.log(`🔍 Fuel Hex - Level=${levelHex}, Volume=${volumeHex}, Temp=${tempHex}, Percent=${percentHex}`);
+      
+      return {
+        fuel_level: (parseInt(levelHex, 16) / 10),
+        fuel_volume: (parseInt(volumeHex, 16) / 10), 
+        fuel_temperature: parseInt(tempHex, 16),
+        fuel_percentage: Math.min(parseInt(percentHex, 16), 100)
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
   // Core fuel calculations
   calculateFuelMetrics(epsData, previousFuelData = null) {
+    // Parse fuel data ONLY from rawMessage hex data
+    let parsedFuel = null;
+    if (epsData.rawMessage) {
+      const parts = epsData.rawMessage.split('|');
+      const hexData = parts[parts.length - 1];
+      if (hexData && hexData.includes(',')) {
+        parsedFuel = this.parseEPSFuelData(hexData);
+      }
+    }
+    
+    // Use ONLY parsed hex data, ignore pre-parsed fields
+    let fuelLevel = parsedFuel?.fuel_level || 0;
+    let fuelVolume = parsedFuel?.fuel_volume || 0;
+    let fuelPercentage = parsedFuel?.fuel_percentage || 0;
+    let fuelTemp = parsedFuel?.fuel_temperature || 0;
+    
     const metrics = {
-      fuel_level: epsData.fuel_level || 0,
-      fuel_volume: epsData.fuel_volume || 0,
-      fuel_percentage: epsData.fuel_percentage || 0,
+      fuel_level: fuelLevel,
+      fuel_volume: fuelVolume,
+      fuel_percentage: fuelPercentage,
+      fuel_temperature: fuelTemp,
       consumption_rate: 0,
       efficiency_kmpl: 0,
       fuel_cost: 0,
@@ -967,7 +999,8 @@ class EPSRewardSystem {
   // Store fuel data hourly
   async storeFuelDataHourly(epsData) {
     try {
-      if (!epsData.fuel_level && !epsData.fuel_volume) {
+      // Only store if we have rawMessage with hex data
+      if (!epsData.rawMessage || !epsData.rawMessage.includes(',')) {
         return;
       }
       
@@ -990,22 +1023,26 @@ class EPSRewardSystem {
       
       const fuelMetrics = this.calculateFuelMetrics(epsData, previousData?.[0]);
       
+      // Don't update if no fuel data was parsed
+      if (!fuelMetrics.fuel_level && !fuelMetrics.fuel_volume) {
+        return;
+      }
+      
       const { error } = await supabase
         .from('eps_fuel_data')
-        .insert({
+        .upsert({
           plate: epsData.Plate,
           driver_name: epsData.DriverName,
           fuel_level: fuelMetrics.fuel_level,
           fuel_volume: fuelMetrics.fuel_volume,
+          fuel_temperature: fuelMetrics.fuel_temperature,
           fuel_percentage: fuelMetrics.fuel_percentage,
-          consumption_rate: fuelMetrics.consumption_rate,
-          efficiency_kmpl: fuelMetrics.efficiency_kmpl,
-          fuel_cost: fuelMetrics.fuel_cost,
-          theft_detected: fuelMetrics.theft_detected,
-          mileage: epsData.Mileage,
+          engine_status: epsData.engine_status,
           loc_time: epsData.LocTime || new Date().toISOString(),
           latitude: epsData.Latitude,
           longitude: epsData.Longitude
+        }, {
+          onConflict: 'plate'
         });
       
       if (error) throw error;
@@ -1013,11 +1050,7 @@ class EPSRewardSystem {
       // Update last storage time
       this.lastFuelStorage.set(plate, now);
       
-      if (fuelMetrics.theft_detected) {
-        console.log(`🚨 FUEL THEFT DETECTED - ${plate}: ${fuelMetrics.consumption_rate}L sudden drop`);
-      }
-      
-      console.log(`✅ Stored fuel data for ${epsData.Plate}: ${fuelMetrics.efficiency_kmpl} km/L, ${fuelMetrics.consumption_rate}L/h`);
+      console.log(`✅ Stored fuel data for ${epsData.Plate}: Level=${fuelMetrics.fuel_level}L, Volume=${fuelMetrics.fuel_volume}L`);
     } catch (error) {
       console.error('Error storing EPS fuel data:', error);
     }
@@ -1209,8 +1242,6 @@ class EPSRewardSystem {
   async createDailySnapshot() {
     try {
       const today = new Date().toISOString().split('T')[0];
-      console.log(`📸 Creating daily snapshot for ${today}`);
-      
       // Get all current driver rewards
       const { data: drivers, error } = await supabase
         .from('eps_driver_rewards')
@@ -1243,8 +1274,6 @@ class EPSRewardSystem {
         .insert(snapshots);
       
       if (insertError) throw insertError;
-      
-      console.log(`✅ Daily snapshot created for ${snapshots.length} drivers`);
     } catch (error) {
       console.error('Error creating daily snapshot:', error);
     }
