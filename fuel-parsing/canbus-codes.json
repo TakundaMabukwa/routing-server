@@ -1,0 +1,1382 @@
+{
+  "44": {
+    "name": "red warning lamps",
+    "divideBy": 1
+  },
+  "46": {
+    "name": "Pneumatic Supply Pressure",
+    "divideBy": 1
+  },
+  "47": {
+    "name": "retarder status",
+    "divideBy": 1
+  },
+  "54": {
+    "name": "wheel speed",
+    "divideBy": 1
+  },
+  "60": {
+    "name": "fuel level %",
+    "divideBy": 1
+  },
+  "70": {
+    "name": "parking brake switch",
+    "divideBy": 1
+  },
+  "89": {
+    "name": "pto status",
+    "divideBy": 1
+  },
+  "91": {
+    "name": "aceleration pedal pos",
+    "divideBy": 1
+  },
+  "94": {
+    "name": "engine Fuel Delivery Pressure",
+    "divideBy": 1
+  },
+  "96": {
+    "name": "fuel Level Liter",
+    "divideBy": 1
+  },
+  "98": {
+    "name": "engine oil level (red lamp)",
+    "divideBy": 1
+  },
+  "99": {
+    "name": "Please check oil level (yellow lamp)",
+    "divideBy": 1
+  },
+  "100": {
+    "name": "brake Position padel",
+    "divideBy": 1
+  },
+  "102": {
+    "name": "engine intake manifold pressure",
+    "divideBy": 1
+  },
+  "105": {
+    "name": "engine intake manifold temperature",
+    "divideBy": 1
+  },
+  "110": {
+    "name": "engine temperature",
+    "divideBy": 1
+  },
+  "111": {
+    "name": "coolant level",
+    "divideBy": 1
+  },
+  "122": {
+    "name": "engine retarder",
+    "divideBy": 1
+  },
+  "123": {
+    "name": "retarder status",
+    "divideBy": 1
+  },
+  "127": {
+    "name": "Transmission Oil Pressure",
+    "divideBy": 1
+  },
+  "176": {
+    "name": "turbu temperator",
+    "divideBy": 1
+  },
+  "177": {
+    "name": "Transmission Oil Temperature",
+    "divideBy": 1
+  },
+  "183": {
+    "name": "fuel rate",
+    "divideBy": 1
+  },
+  "184": {
+    "name": "instantaneous fuel economy",
+    "divideBy": 1
+  },
+  "187": {
+    "name": "KwRate  instantaneous",
+    "divideBy": 1
+  },
+  "188": {
+    "name": "Battrey Higt Voltage Higer",
+    "divideBy": 1
+  },
+  "189": {
+    "name": "Driver door button",
+    "divideBy": 1
+  },
+  "190": {
+    "name": "engine speed",
+    "divideBy": 1
+  },
+  "191": {
+    "name": "Passenger door button",
+    "divideBy": 1
+  },
+  "192": {
+    "name": "Trunk door button",
+    "divideBy": 1
+  },
+  "193": {
+    "name": "Forward Collision-Avoidance Assist malfunction",
+    "divideBy": 1
+  },
+  "194": {
+    "name": "LED headlamp malfunction",
+    "divideBy": 1
+  },
+  "195": {
+    "name": "Blind-Spot Collision Warning malfunction",
+    "divideBy": 1
+  },
+  "196": {
+    "name": "Charging system  malfunction",
+    "divideBy": 1
+  },
+  "197": {
+    "name": "Connect to OBD Port",
+    "divideBy": 1
+  },
+  "198": {
+    "name": "Engine on and key is in the car",
+    "divideBy": 1
+  },
+  "199": {
+    "name": "Exhaust system GPF ( Gasoline eng)",
+    "divideBy": 1
+  },
+  "200": {
+    "name": "Fuel Filter ( for Diesel)",
+    "divideBy": 1
+  },
+  "201": {
+    "name": "HEV Warning Light",
+    "divideBy": 1
+  },
+  "202": {
+    "name": "FRONT AND REAR DRIVING",
+    "divideBy": 1
+  },
+  "203": {
+    "name": "SCR (Urea)",
+    "divideBy": 1
+  },
+  "204": {
+    "name": "Coolent Level Lamp",
+    "divideBy": 1
+  },
+  "205": {
+    "name": "Range (Gasoline driving)",
+    "divideBy": 1
+  },
+  "206": {
+    "name": "ACC-Adaptive Cruise Control Service Required",
+    "divideBy": 1
+  },
+  "207": {
+    "name": "Auto Hold State",
+    "divideBy": 1
+  },
+  "208": {
+    "name": "Seat Belt Switch Driver (FL)",
+    "divideBy": 1
+  },
+  "209": {
+    "name": "Cruise Control Enable Switch",
+    "divideBy": 1
+  },
+  "210": {
+    "name": "Down Hill Brake Control",
+    "divideBy": 1
+  },
+  "211": {
+    "name": "Head lights status",
+    "divideBy": 1
+  },
+  "212": {
+    "name": "Mirror state",
+    "divideBy": 1
+  },
+  "213": {
+    "name": "VIN",
+    "divideBy": 1
+  },
+  "214": {
+    "name": "wheel speed",
+    "divideBy": 1
+  },
+  "215": {
+    "name": "Windows Status",
+    "divideBy": 1
+  },
+  "216": {
+    "name": "EBD fault warning indicator",
+    "divideBy": 1
+  },
+  "217": {
+    "name": "AEB fault warning",
+    "divideBy": 1
+  },
+  "218": {
+    "name": "AEB system off",
+    "divideBy": 1
+  },
+  "219": {
+    "name": "System fault warning indicator",
+    "divideBy": 1
+  },
+  "220": {
+    "name": "Motor and controller overheat warning indictor",
+    "divideBy": 1
+  },
+  "221": {
+    "name": "Power battery fault warning indicator",
+    "divideBy": 1
+  },
+  "222": {
+    "name": "Power limit indicator",
+    "divideBy": 1
+  },
+  "223": {
+    "name": "Power battery low power",
+    "divideBy": 1
+  },
+  "224": {
+    "name": "Hill descent control HDC green lamp",
+    "divideBy": 1
+  },
+  "225": {
+    "name": "Driving mode sport",
+    "divideBy": 1
+  },
+  "226": {
+    "name": "Brake system fault warning indicator yellow lamp",
+    "divideBy": 1
+  },
+  "227": {
+    "name": "Reducer fault warning indicator red lamp",
+    "divideBy": 1
+  },
+  "228": {
+    "name": "Hill descent control HDC yellow lamp",
+    "divideBy": 1
+  },
+  "229": {
+    "name": "Smart key acc",
+    "divideBy": 1
+  },
+  "230": {
+    "name": "Charging Time min",
+    "divideBy": 1
+  },
+  "231": {
+    "name": "Charging Time hour",
+    "divideBy": 1
+  },
+  "232": {
+    "name": "Charging current (KW)",
+    "divideBy": 1
+  },
+  "233": {
+    "name": "Charging Percent is Limited AC",
+    "divideBy": 1
+  },
+  "235": {
+    "name": "Seat Sensor Driver",
+    "divideBy": 1
+  },
+  "236": {
+    "name": "total idle fuel used",
+    "divideBy": 1
+  },
+  "237": {
+    "name": "Key Not Valid (Engine Off)",
+    "divideBy": 1
+  },
+  "238": {
+    "name": "Invalid scan 3",
+    "divideBy": 1
+  },
+  "239": {
+    "name": "Invalid scan 4",
+    "divideBy": 1
+  },
+  "240": {
+    "name": "Charging Percent is Limited DC",
+    "divideBy": 1
+  },
+  "241": {
+    "name": "High lights status",
+    "divideBy": 1
+  },
+  "242": {
+    "name": "Wipers on",
+    "divideBy": 1
+  },
+  "243": {
+    "name": "Turn Signal Left",
+    "divideBy": 1
+  },
+  "244": {
+    "name": "Turn Signal Right",
+    "divideBy": 1
+  },
+  "245": {
+    "name": "total odometer",
+    "divideBy": 1000
+  },
+  "246": {
+    "name": "Invalid scan 5",
+    "divideBy": 1
+  },
+  "247": {
+    "name": "total engine hours",
+    "divideBy": 1
+  },
+  "248": {
+    "name": "Doors are closed and locked",
+    "divideBy": 1
+  },
+  "249": {
+    "name": "ODO Raw Data meters",
+    "divideBy": 1
+  },
+  "250": {
+    "name": "total fuel used",
+    "divideBy": 1
+  },
+  "251": {
+    "name": "Invalid scan 6",
+    "divideBy": 1
+  },
+  "253": {
+    "name": "Emergency stop generator",
+    "divideBy": 1
+  },
+  "254": {
+    "name": "total fuel used",
+    "divideBy": 1
+  },
+  "255": {
+    "name": "Brake Pedal Switch",
+    "divideBy": 1
+  },
+  "256": {
+    "name": "clutch switch",
+    "divideBy": 1
+  },
+  "283": {
+    "name": "DPD status",
+    "divideBy": 1
+  },
+  "395": {
+    "name": "total odometer",
+    "divideBy": 1000
+  },
+  "396": {
+    "name": "High Resolution Trip Distance",
+    "divideBy": 1
+  },
+  "441": {
+    "name": "Check Air bag light",
+    "divideBy": 1
+  },
+  "442": {
+    "name": "Cheke ABS light",
+    "divideBy": 1
+  },
+  "443": {
+    "name": "Fuel level lamp",
+    "divideBy": 1
+  },
+  "444": {
+    "name": "ignition sw on/off",
+    "divideBy": 1
+  },
+  "445": {
+    "name": "Diesel fault lamp",
+    "divideBy": 1
+  },
+  "446": {
+    "name": "EPC fault lamp",
+    "divideBy": 1
+  },
+  "447": {
+    "name": "Outdoor temperature",
+    "divideBy": 1
+  },
+  "448": {
+    "name": "Acc",
+    "divideBy": 1
+  },
+  "513": {
+    "name": "wheel speed",
+    "divideBy": 1
+  },
+  "522": {
+    "name": "clutch slip",
+    "divideBy": 1
+  },
+  "523": {
+    "name": "Transmission current gear",
+    "divideBy": 1
+  },
+  "556": {
+    "name": "clutch switch",
+    "divideBy": 1
+  },
+  "564": {
+    "name": "Differential Lock State - Central",
+    "divideBy": 1
+  },
+  "566": {
+    "name": "differential lock state central rear",
+    "divideBy": 1
+  },
+  "569": {
+    "name": "differential lock state front axle one",
+    "divideBy": 1
+  },
+  "570": {
+    "name": "differential lock state front axle two",
+    "divideBy": 1
+  },
+  "571": {
+    "name": "Retarder Enable - Brake Assist Switch",
+    "divideBy": 1
+  },
+  "572": {
+    "name": "Brake Assist State",
+    "divideBy": 1
+  },
+  "582": {
+    "name": "axl weight",
+    "divideBy": 1
+  },
+  "592": {
+    "name": "brak switch",
+    "divideBy": 1
+  },
+  "596": {
+    "name": "Ign&starter&engine",
+    "divideBy": 1
+  },
+  "650": {
+    "name": "AC output generator",
+    "divideBy": 1
+  },
+  "780": {
+    "name": "Transmission Shift Finger Neutral Indicator",
+    "divideBy": 1
+  },
+  "905": {
+    "name": "RelSpeedFrontAxleLeftWheel",
+    "divideBy": 1
+  },
+  "906": {
+    "name": "RelSpeedFrontAxleRightWheel",
+    "divideBy": 1
+  },
+  "907": {
+    "name": "RelSpeedRearAxleLeftWheel",
+    "divideBy": 1
+  },
+  "908": {
+    "name": "RelSpeedRearAxleRightWheel",
+    "divideBy": 1
+  },
+  "928": {
+    "name": "axl loction",
+    "divideBy": 1
+  },
+  "988": {
+    "name": "engine oil level",
+    "divideBy": 1
+  },
+  "1080": {
+    "name": "Brake lining sensor",
+    "divideBy": 1
+  },
+  "1086": {
+    "name": "parking trailer air pressure",
+    "divideBy": 1
+  },
+  "1087": {
+    "name": "service brake air pressure circuit1",
+    "divideBy": 1
+  },
+  "1088": {
+    "name": "service brake air pressure circuit2",
+    "divideBy": 1
+  },
+  "1091": {
+    "name": "Brake Application Pressure High Range, Front Axle, Left Wheel",
+    "divideBy": 1
+  },
+  "1092": {
+    "name": "Brake Application Pressure High Range, Front Axle, Right Wheel",
+    "divideBy": 1
+  },
+  "1099": {
+    "name": "brake lining front left",
+    "divideBy": 1
+  },
+  "1100": {
+    "name": "brake lining front right",
+    "divideBy": 1
+  },
+  "1101": {
+    "name": "brake lining rear 1 left",
+    "divideBy": 1
+  },
+  "1102": {
+    "name": "brake lining rear 1 right",
+    "divideBy": 1
+  },
+  "1103": {
+    "name": "brake lining rear 2 left",
+    "divideBy": 1
+  },
+  "1104": {
+    "name": "brake lining rear 2 right",
+    "divideBy": 1
+  },
+  "1105": {
+    "name": "brake lining rear 3 left",
+    "divideBy": 1
+  },
+  "1106": {
+    "name": "brake lining rear 3 right",
+    "divideBy": 1
+  },
+  "1351": {
+    "name": "air compressor status",
+    "divideBy": 1
+  },
+  "1364": {
+    "name": "engine temperature",
+    "divideBy": 1
+  },
+  "1761": {
+    "name": "Catalyst Tank Level",
+    "divideBy": 1
+  },
+  "1765": {
+    "name": "Insulation Resistance of PositiveLow Digits",
+    "divideBy": 1
+  },
+  "1766": {
+    "name": "Insulation Resistance of PositiveHigh Digits",
+    "divideBy": 1
+  },
+  "1767": {
+    "name": "Insulation Resistance of MinusLow Digits",
+    "divideBy": 1
+  },
+  "1768": {
+    "name": "Insulation Resistance of MinusHigh Digits",
+    "divideBy": 1
+  },
+  "1769": {
+    "name": "Vehicle SpeedHigh Digits",
+    "divideBy": 1
+  },
+  "1807": {
+    "name": "Steering Wheel Angle",
+    "divideBy": 1
+  },
+  "1856": {
+    "name": "Seat Belt Switch passnger (FR)",
+    "divideBy": 1
+  },
+  "2002": {
+    "name": "hydrolic praasure for equipment",
+    "divideBy": 1
+  },
+  "2003": {
+    "name": "Service information",
+    "divideBy": 1
+  },
+  "2004": {
+    "name": "Exhaust Gas  flow",
+    "divideBy": 1
+  },
+  "2006": {
+    "name": "Srevice is required.",
+    "divideBy": 1
+  },
+  "2007": {
+    "name": "Tire pressure lamp",
+    "divideBy": 1
+  },
+  "2008": {
+    "name": "low fuel level(lamp)",
+    "divideBy": 1
+  },
+  "2009": {
+    "name": "ESP light on",
+    "divideBy": 1
+  },
+  "2010": {
+    "name": "glow plug indicator light",
+    "divideBy": 1
+  },
+  "2011": {
+    "name": "Doors  Status",
+    "divideBy": 1
+  },
+  "2012": {
+    "name": "EMPS indecator light",
+    "divideBy": 1
+  },
+  "2013": {
+    "name": "brake fluid indecator lught",
+    "divideBy": 1
+  },
+  "2014": {
+    "name": "HAZARD",
+    "divideBy": 1
+  },
+  "2015": {
+    "name": "Electrical Engine on",
+    "divideBy": 1
+  },
+  "2016": {
+    "name": "Battery charge status% High Voltage",
+    "divideBy": 1
+  },
+  "2017": {
+    "name": "Eco mode",
+    "divideBy": 1
+  },
+  "2018": {
+    "name": "on board charger temerature",
+    "divideBy": 1
+  },
+  "2019": {
+    "name": "Engine heat lamp              מנורת חום מנוע",
+    "divideBy": 1
+  },
+  "2020": {
+    "name": "Fuel 1 level (Fuel Prob)",
+    "divideBy": 1
+  },
+  "2021": {
+    "name": "Fuel 1 volume in tank (Fuel Prob)",
+    "divideBy": 1
+  },
+  "2022": {
+    "name": "Fuel 1 temperature (Fuel Prob)",
+    "divideBy": 1
+  },
+  "2023": {
+    "name": "Fuel 1 level (Fuel Prob)",
+    "divideBy": 1
+  },
+  "2024": {
+    "name": "Fuel 2 level (Fuel Prob)",
+    "divideBy": 1
+  },
+  "2025": {
+    "name": "Fuel 2 volume in tank (Fuel Prob)",
+    "divideBy": 1
+  },
+  "2026": {
+    "name": "Fuel 2 temperature (Fuel Prob)",
+    "divideBy": 1
+  },
+  "2027": {
+    "name": "Fuel 2  level (Fuel Prob)",
+    "divideBy": 1
+  },
+  "2028": {
+    "name": "ESP light off",
+    "divideBy": 1
+  },
+  "2029": {
+    "name": "Gear selector Parking",
+    "divideBy": 1
+  },
+  "2030": {
+    "name": "Gear selector Drive",
+    "divideBy": 1
+  },
+  "2031": {
+    "name": "Gear selector Neutral",
+    "divideBy": 1
+  },
+  "2032": {
+    "name": "Gear selector Reverse",
+    "divideBy": 1
+  },
+  "2033": {
+    "name": "Gear selector Sport",
+    "divideBy": 1
+  },
+  "2034": {
+    "name": "Locking Status",
+    "divideBy": 1
+  },
+  "2035": {
+    "name": "UNKNOWN",
+    "divideBy": 1
+  },
+  "2223": {
+    "name": "Wash fluid",
+    "divideBy": 1
+  },
+  "2225": {
+    "name": "Lights",
+    "divideBy": 1
+  },
+  "2226": {
+    "name": "Charging Flap Open",
+    "divideBy": 1
+  },
+  "2227": {
+    "name": "Charging Plug Status",
+    "divideBy": 1
+  },
+  "2228": {
+    "name": "Charging Mode",
+    "divideBy": 1
+  },
+  "2229": {
+    "name": "range for recharging",
+    "divideBy": 1
+  },
+  "2291": {
+    "name": "Charging Time min AC",
+    "divideBy": 1
+  },
+  "2292": {
+    "name": "Charging Time min DC",
+    "divideBy": 1
+  },
+  "2329": {
+    "name": "engine oil pressure",
+    "divideBy": 1
+  },
+  "2330": {
+    "name": "front right wheel pressure (TPMS)",
+    "divideBy": 1
+  },
+  "2331": {
+    "name": "front lift wheel pressure (TPMS)",
+    "divideBy": 1
+  },
+  "2332": {
+    "name": "rear right wheel pressure (TPMS)",
+    "divideBy": 1
+  },
+  "2333": {
+    "name": "rear lift wheel pressure (TPMS)",
+    "divideBy": 1
+  },
+  "2334": {
+    "name": "Battrey status of Charge %",
+    "divideBy": 1
+  },
+  "2335": {
+    "name": "High Voltage battery (electrical cars)",
+    "divideBy": 1
+  },
+  "2432": {
+    "name": "Engine Demand – Percent Torque",
+    "divideBy": 1
+  },
+  "2521": {
+    "name": "Keyless 4",
+    "divideBy": 1
+  },
+  "2550": {
+    "name": "Brake System Milfuction",
+    "divideBy": 1
+  },
+  "3000": {
+    "name": "Engine oil heat lamp",
+    "divideBy": 1
+  },
+  "3001": {
+    "name": "High Beam",
+    "divideBy": 1
+  },
+  "3002": {
+    "name": "Low Beam",
+    "divideBy": 1
+  },
+  "3571": {
+    "name": "Battery Total VoltageLow Digits",
+    "divideBy": 1
+  },
+  "3572": {
+    "name": "Battery Total VoltageHigh Digits",
+    "divideBy": 1
+  },
+  "3573": {
+    "name": "Battery Total CurrentLow Digits",
+    "divideBy": 1
+  },
+  "3574": {
+    "name": "Battery Total CurrentHigh Digits",
+    "divideBy": 1
+  },
+  "3580": {
+    "name": "Trouble lamp and DTC",
+    "divideBy": 1
+  },
+  "3827": {
+    "name": "Highest Cell VoltageLow Digits",
+    "divideBy": 1
+  },
+  "3828": {
+    "name": "Highest Cell VoltageHigh Digits",
+    "divideBy": 1
+  },
+  "3829": {
+    "name": "lowest Cell VoltageLow Digits",
+    "divideBy": 1
+  },
+  "3830": {
+    "name": "lowest Cell VoltageHigh Digits",
+    "divideBy": 1
+  },
+  "3831": {
+    "name": "Highest Cell Temperature",
+    "divideBy": 1
+  },
+  "3832": {
+    "name": "lowest Cell Temperature",
+    "divideBy": 1
+  },
+  "3989": {
+    "name": "Steering Pump Voltage Low digit",
+    "divideBy": 1
+  },
+  "3990": {
+    "name": "Steering Pump Voltage High digit",
+    "divideBy": 1
+  },
+  "3991": {
+    "name": "Steering Pump Current",
+    "divideBy": 1
+  },
+  "3992": {
+    "name": "Steering Pump Temperature",
+    "divideBy": 1
+  },
+  "3994": {
+    "name": "DC/DC VoltageHigh Digits",
+    "divideBy": 1
+  },
+  "3995": {
+    "name": "DC/DC Current",
+    "divideBy": 1
+  },
+  "3996": {
+    "name": "DC/DC Temperature",
+    "divideBy": 1
+  },
+  "3997": {
+    "name": "Air Compressor Voltage Low digit",
+    "divideBy": 1
+  },
+  "3998": {
+    "name": "Air Compressor voltage High digit",
+    "divideBy": 1
+  },
+  "3999": {
+    "name": "Air Compressor Current",
+    "divideBy": 1
+  },
+  "4000": {
+    "name": "Air Compressor Temperature",
+    "divideBy": 1
+  },
+  "4080": {
+    "name": "Motor VoltageLow Digits",
+    "divideBy": 1
+  },
+  "4081": {
+    "name": "Motor VoltageHigh Digits",
+    "divideBy": 1
+  },
+  "4082": {
+    "name": "Motor CurrentLow Digits",
+    "divideBy": 1
+  },
+  "4083": {
+    "name": "Motor CurrentHigh Digits",
+    "divideBy": 1
+  },
+  "7997": {
+    "name": "Water in fuel",
+    "divideBy": 1
+  },
+  "9100": {
+    "name": "Input PowerHigh digits",
+    "divideBy": 1
+  },
+  "9200": {
+    "name": "Input PowerLow digits",
+    "divideBy": 1
+  },
+  "9300": {
+    "name": "Energy Meter",
+    "divideBy": 1
+  },
+  "9400": {
+    "name": "Insulation Test Success",
+    "divideBy": 1
+  },
+  "9500": {
+    "name": "SOCHigh digits",
+    "divideBy": 1
+  },
+  "9600": {
+    "name": "SOCLow digits",
+    "divideBy": 1
+  },
+  "9601": {
+    "name": "Check FCA Clollsen",
+    "divideBy": 1
+  },
+  "9602": {
+    "name": "Check Hybrid system",
+    "divideBy": 1
+  },
+  "9603": {
+    "name": "Check BCW system",
+    "divideBy": 1
+  },
+  "9604": {
+    "name": "Check head lamp",
+    "divideBy": 1
+  },
+  "9605": {
+    "name": "Check LDW lane Departure Worning",
+    "divideBy": 1
+  },
+  "9606": {
+    "name": "Check EPB",
+    "divideBy": 1
+  },
+  "9607": {
+    "name": "Diesel Particulate Filter Active Regeneration Status",
+    "divideBy": 1
+  },
+  "9608": {
+    "name": "Diesel Particulate Filter Status",
+    "divideBy": 1
+  },
+  "9609": {
+    "name": "Diesel Particulate Filter Passive Regeneration Status",
+    "divideBy": 1
+  },
+  "9610": {
+    "name": "Diesel Particulate Filter Active Regeneration Inhibited Due to Inhibit Switch",
+    "divideBy": 1
+  },
+  "9612": {
+    "name": "Incorrect urea consumd",
+    "divideBy": 1
+  },
+  "9613": {
+    "name": "Fault measurement of urea",
+    "divideBy": 1
+  },
+  "9614": {
+    "name": "Pollutant emission fault Speed reduction",
+    "divideBy": 1
+  },
+  "9615": {
+    "name": "The urea Tenk is Empti",
+    "divideBy": 1
+  },
+  "9616": {
+    "name": "Low urea level waiting",
+    "divideBy": 1
+  },
+  "9617": {
+    "name": "Check urea level at next stop",
+    "divideBy": 1
+  },
+  "9618": {
+    "name": "Charging Rate Kw",
+    "divideBy": 1
+  },
+  "9619": {
+    "name": "Oil service inspection",
+    "divideBy": 1
+  },
+  "9620": {
+    "name": "Please Refuel",
+    "divideBy": 1
+  },
+  "9621": {
+    "name": "Oil service inspection 1000km",
+    "divideBy": 1
+  },
+  "9622": {
+    "name": "Fuel Used C02 Emission",
+    "divideBy": 1
+  },
+  "9623": {
+    "name": "Keyless",
+    "divideBy": 1
+  },
+  "9624": {
+    "name": "Ecas",
+    "divideBy": 1
+  },
+  "9625": {
+    "name": "Invalid scan 1",
+    "divideBy": 1
+  },
+  "9627": {
+    "name": "Invalid scan 2",
+    "divideBy": 1
+  },
+  "9628": {
+    "name": "Charging AC  (A charging handle is attached to an electric vehicle)",
+    "divideBy": 1
+  },
+  "9629": {
+    "name": "Charging DC  (A charging handle is attached to an electric vehicle)",
+    "divideBy": 1
+  },
+  "9630": {
+    "name": "Keyless 2 (Push Button with key fob to start)",
+    "divideBy": 1
+  },
+  "9631": {
+    "name": "Air condetir on (AC ON)",
+    "divideBy": 1
+  },
+  "9632": {
+    "name": "Keyless 3",
+    "divideBy": 1
+  },
+  "9633": {
+    "name": "Start Buttn (Push Button with key fob to start)",
+    "divideBy": 1
+  },
+  "100A": {
+    "name": "engine oil pressure",
+    "divideBy": 1
+  },
+  "11A": {
+    "name": "engine speed over",
+    "divideBy": 1
+  },
+  "11B": {
+    "name": "retarder status",
+    "divideBy": 1
+  },
+  "133A": {
+    "name": "ABS Left wheel sensor",
+    "divideBy": 1
+  },
+  "133B": {
+    "name": "ABS Right wheel sensor",
+    "divideBy": 1
+  },
+  "133C": {
+    "name": "ABS Left rear wheel",
+    "divideBy": 1
+  },
+  "133D": {
+    "name": "ABS Right rear wheel",
+    "divideBy": 1
+  },
+  "133E": {
+    "name": "VSS",
+    "divideBy": 1
+  },
+  "136B": {
+    "name": "engine intake manifold temperature",
+    "divideBy": 1
+  },
+  "136C": {
+    "name": "fuel rate",
+    "divideBy": 1
+  },
+  "136a": {
+    "name": "engine oil temperature",
+    "divideBy": 1
+  },
+  "175C": {
+    "name": "engine oil temperature",
+    "divideBy": 1
+  },
+  "176C": {
+    "name": "turbu temperator",
+    "divideBy": 1
+  },
+  "183A": {
+    "name": "Fuel consumption is calculated for heavy trucks on the server",
+    "divideBy": 1
+  },
+  "183B": {
+    "name": "Fuel consumption is calculated for small trucks on the server",
+    "divideBy": 1
+  },
+  "183C": {
+    "name": "Fuel consumption is calculated for private vehicles on the server",
+    "divideBy": 1
+  },
+  "183D": {
+    "name": "can bus Consumption is calculated per unit",
+    "divideBy": 1
+  },
+  "185A": {
+    "name": "Returning energy for travel in Kw",
+    "divideBy": 1
+  },
+  "185B": {
+    "name": "Wotat temprature battrey inlet",
+    "divideBy": 1
+  },
+  "185C": {
+    "name": "Thermostat temperature",
+    "divideBy": 1
+  },
+  "185D": {
+    "name": "Resistance Kilo Ohms 1",
+    "divideBy": 1
+  },
+  "185E": {
+    "name": "Resistance Kilo Ohms 2",
+    "divideBy": 1
+  },
+  "185F": {
+    "name": "Resistance Kilo Ohms 3",
+    "divideBy": 1
+  },
+  "186A": {
+    "name": "Engine cooler tempratore",
+    "divideBy": 1
+  },
+  "186B": {
+    "name": "Engine blower tempratore",
+    "divideBy": 1
+  },
+  "186C": {
+    "name": "Maximum temperature",
+    "divideBy": 1
+  },
+  "186D": {
+    "name": "Minimum temperature",
+    "divideBy": 1
+  },
+  "200A": {
+    "name": "Kw/km Higer electric  Bus",
+    "divideBy": 1
+  },
+  "201A": {
+    "name": "Door driver",
+    "divideBy": 1
+  },
+  "201B": {
+    "name": "Door passanger",
+    "divideBy": 1
+  },
+  "201C": {
+    "name": "Door rear left",
+    "divideBy": 1
+  },
+  "201D": {
+    "name": "Door rear right",
+    "divideBy": 1
+  },
+  "201E": {
+    "name": "Trunk",
+    "divideBy": 1
+  },
+  "201F": {
+    "name": "Hood",
+    "divideBy": 1
+  },
+  "232A": {
+    "name": "Engine oil pressure Lamp",
+    "divideBy": 1
+  },
+  "232B": {
+    "name": "torque limiter",
+    "divideBy": 1
+  },
+  "247A": {
+    "name": "Trip engine hour",
+    "divideBy": 1
+  },
+  "247B": {
+    "name": "gasoline engine ON/OFF (Calculation of how long gasoline works in a hybrid vehicle)",
+    "divideBy": 1
+  },
+  "256C": {
+    "name": "clutch pedal position",
+    "divideBy": 1
+  },
+  "3D0": {
+    "name": "pto status",
+    "divideBy": 1
+  },
+  "44A": {
+    "name": "orange warning lamps",
+    "divideBy": 1
+  },
+  "44B": {
+    "name": "Engine oil led",
+    "divideBy": 1
+  },
+  "44C": {
+    "name": "Engine engectors led",
+    "divideBy": 1
+  },
+  "44D": {
+    "name": "Check engine light",
+    "divideBy": 1
+  },
+  "44E": {
+    "name": "DPF led",
+    "divideBy": 1
+  },
+  "513A": {
+    "name": "Actual Engine - Percent Torque",
+    "divideBy": 1
+  },
+  "59A": {
+    "name": "accelaration padal on idling",
+    "divideBy": 1
+  },
+  "59B": {
+    "name": "engine speed",
+    "divideBy": 1
+  },
+  "59C": {
+    "name": "engine ratarder",
+    "divideBy": 1
+  },
+  "5B": {
+    "name": "accelaration padal on idling",
+    "divideBy": 1
+  },
+  "60A": {
+    "name": "fuel Level",
+    "divideBy": 1
+  },
+  "6A": {
+    "name": "engine oil work shop sensor",
+    "divideBy": 1
+  },
+  "6AA": {
+    "name": "Battrey temperature",
+    "divideBy": 1
+  },
+  "6E": {
+    "name": "engine temperature",
+    "divideBy": 1
+  },
+  "6EA": {
+    "name": "high engine coolant temp",
+    "divideBy": 1
+  },
+  "6EE": {
+    "name": "Motor Temperature",
+    "divideBy": 1
+  },
+  "6EEE": {
+    "name": "Signal 1Motor Controller Temperature",
+    "divideBy": 1
+  },
+  "6F": {
+    "name": "engine DPF/DPD TEMPERATUE",
+    "divideBy": 1
+  },
+  "7A": {
+    "name": "Catalyst Tank Level",
+    "divideBy": 1
+  },
+  "7C": {
+    "name": "Charging voltage",
+    "divideBy": 1
+  },
+  "900A": {
+    "name": "Charging Energy High digit",
+    "divideBy": 1
+  },
+  "900B": {
+    "name": "Charging Energy Low digit",
+    "divideBy": 1
+  },
+  "900C": {
+    "name": "Charging VoltageHigh Digits",
+    "divideBy": 1
+  },
+  "900D": {
+    "name": "Charging Voltage Low digit",
+    "divideBy": 1
+  },
+  "900E": {
+    "name": "Charging Current High digit",
+    "divideBy": 1
+  },
+  "900F": {
+    "name": "Charging Current Low digit",
+    "divideBy": 1
+  },
+  "A": {
+    "name": "Hybrid Battay low shift to park",
+    "divideBy": 1
+  },
+  "ABC1": {
+    "name": "Ignition State (starlink)",
+    "divideBy": 1
+  },
+  "ABC2": {
+    "name": "GPS Speed (starlink )",
+    "divideBy": 1
+  },
+  "ABC3": {
+    "name": "GPS Heading (starlink )",
+    "divideBy": 1
+  },
+  "ABC4": {
+    "name": "Battery Voltage (Starlink )",
+    "divideBy": 1
+  },
+  "B": {
+    "name": "Hybrid Battrary low shift out of nutral",
+    "divideBy": 1
+  },
+  "BB": {
+    "name": "MAS AIR FLOW",
+    "divideBy": 1
+  },
+  "BE": {
+    "name": "engine speed",
+    "divideBy": 1
+  },
+  "BF": {
+    "name": "engine speed",
+    "divideBy": 1
+  },
+  "C": {
+    "name": "Hybrid system  overheated",
+    "divideBy": 1
+  },
+  "EC1": {
+    "name": "Brake trouble code",
+    "divideBy": 1
+  },
+  "F6": {
+    "name": "The ft Alarm (Status Remote Alarm)",
+    "divideBy": 1
+  },
+  "FA": {
+    "name": "total fuel used",
+    "divideBy": 1
+  }
+}

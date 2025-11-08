@@ -4,17 +4,63 @@ const WebSocket = require('ws');
 const EPSRewardSystem = require('./reward-system/eps-reward-system');
 const epsRoutes = require('./reward-system/eps-rewards');
 const statsRoutes = require('./reward-system/stats-routes');
+const { parseWithNames } = require('./fuel-parsing/canbus-parser-v2');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const path = require('path');
+const Database = require('better-sqlite3');
 
 // Middleware
 app.use(express.json());
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+});
+
+// Store for SSE clients
+const sseClients = new Set();
 
 // Cache latest vehicle data
 const vehicleDataCache = new Map();
-// Cache latest fuel data separately for real-time access
-const fuelDataCache = new Map();
+
+// SQLite database
+const db = new Database(path.join(__dirname, 'canbus.db'));
+
+// Create table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS canbus (
+    plate TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    timestamp TEXT NOT NULL
+  )
+`);
+
+// Memory cache
+const canBusCache = new Map();
+
+// Load existing data into cache
+const rows = db.prepare('SELECT * FROM canbus').all();
+rows.forEach(row => {
+  const vehicleData = JSON.parse(row.data);
+  canBusCache.set(row.plate, vehicleData);
+});
+console.log(`Loaded CAN bus data for ${canBusCache.size} vehicles`);
+
+// Prepared statement for upsert
+const upsertStmt = db.prepare(`
+  INSERT INTO canbus (plate, data, timestamp) 
+  VALUES (?, ?, ?)
+  ON CONFLICT(plate) DO UPDATE SET data = ?, timestamp = ?
+`);
+
+function saveCanBusData(plate, data) {
+  const dataStr = JSON.stringify(data);
+  const timestamp = data.timestamp;
+  upsertStmt.run(plate, dataStr, timestamp, dataStr, timestamp);
+}
 
 // Initialize EPS Reward System
 const rewardSystem = new EPSRewardSystem();
@@ -33,41 +79,41 @@ ws.on('message', async (data) => {
     // Cache latest vehicle data
     vehicleDataCache.set(vehicleData.Plate, vehicleData);
     
-    console.log(`Received data for vehicle ${vehicleData.Plate}:`, {
-      speed: vehicleData.Speed,
-      lat: vehicleData.Latitude,
-      lng: vehicleData.Longitude
-    });
+    // console.log(`Received data for vehicle ${vehicleData.Plate}:`, {
+    //   speed: vehicleData.Speed,
+    //   lat: vehicleData.Latitude,
+    //   lng: vehicleData.Longitude
+    // });
     
-    console.log('Full data:', JSON.stringify(vehicleData, null, 2));
-    
-    // Parse and cache fuel data from rawMessage
-    let fuelData = null;
+    // Parse CAN bus data from rawMessage
     if (vehicleData.rawMessage) {
       const parts = vehicleData.rawMessage.split('|');
-      const hexData = parts[parts.length - 1];
-      if (hexData && hexData.includes(',')) {
-        fuelData = rewardSystem.parseEPSFuelData(hexData);
-      }
-    }
-    
-    if (fuelData) {
-      // Cache fresh fuel data for real-time access
-      fuelDataCache.set(vehicleData.Plate, {
-        ...fuelData,
-        plate: vehicleData.Plate,
-        timestamp: new Date().toISOString(),
-        location: {
-          latitude: vehicleData.Latitude,
-          longitude: vehicleData.Longitude
-        }
-      });
+      const canBusData = parts[parts.length - 1];
       
-      // Store to database only once per hour
-      try {
-        await rewardSystem.storeFuelDataHourly(vehicleData);
-      } catch (error) {
-        console.error('Error storing hourly fuel data:', error);
+      if (canBusData && canBusData.trim() !== '') {
+        const parsed = parseWithNames(canBusData);
+        if (parsed.length > 0) {
+          console.log(`\n========== ${vehicleData.Plate} ==========`);
+          parsed.forEach(item => {
+            console.log(`${item.code.padEnd(6)} | ${item.name.padEnd(40)} | ${item.value}`);
+          });
+          console.log(`========================================\n`);
+          
+          // Stream to SSE clients
+          const streamData = {
+            plate: vehicleData.Plate,
+            timestamp: new Date().toISOString(),
+            data: parsed
+          };
+          
+          // Store in CAN bus cache and database
+          canBusCache.set(vehicleData.Plate, streamData);
+          saveCanBusData(vehicleData.Plate, streamData);
+          
+          sseClients.forEach(client => {
+            client.write(`data: ${JSON.stringify(streamData)}\n\n`);
+          });
+        }
       }
     }
     
@@ -75,13 +121,6 @@ ws.on('message', async (data) => {
     if (vehicleData.DriverName && vehicleData.Plate) {
       try {
         const result = await rewardSystem.processEPSData(vehicleData);
-        if (result) {
-          // console.log(`📊 EPS Result for ${vehicleData.DriverName}:`, {
-          //   violations: result.violations.length,
-          //   points: result.driverScore.currentPoints,
-          //   level: result.driverScore.level
-          // });
-        }
       } catch (error) {
         console.error('Error processing EPS data:', error);
       }
@@ -98,6 +137,12 @@ ws.on('error', (error) => {
 
 ws.on('close', () => {
   console.log('WebSocket connection closed');
+});
+
+// Serve the stream client
+app.get('/stream-client', (req, res) => {
+  const path = require('path');
+  res.sendFile(path.join(__dirname, 'stream-client.html'));
 });
 
 // Basic Express route
@@ -131,20 +176,45 @@ app.get('/vehicles', (req, res) => {
   res.json(vehicles);
 });
 
-// Get real-time fuel data for Next.js app
-app.get('/fuel', (req, res) => {
-  const fuelData = Array.from(fuelDataCache.values());
-  res.json(fuelData);
+// API key validation
+const CANBUS_API_KEY = process.env.CANBUS_API_KEY || 'your-secret-key-here';
+
+function validateApiKey(req, res, next) {
+  const apiKey = req.query.key || req.headers['x-api-key'];
+  if (apiKey !== CANBUS_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid API key' });
+  }
+  next();
+}
+
+// Get latest CAN bus data snapshot
+app.get('/canbus/snapshot', validateApiKey, (req, res) => {
+  const snapshot = Array.from(canBusCache.values());
+  res.json(snapshot);
 });
 
-// Get specific vehicle fuel data
-app.get('/fuel/:plate', (req, res) => {
-  const fuelData = fuelDataCache.get(req.params.plate);
-  if (fuelData) {
-    res.json(fuelData);
+// Get CAN bus data for specific vehicle
+app.get('/canbus/:plate', validateApiKey, (req, res) => {
+  const data = canBusCache.get(req.params.plate);
+  if (data) {
+    res.json(data);
   } else {
-    res.status(404).json({ error: 'No fuel data found for vehicle' });
+    res.status(404).json({ error: 'No CAN bus data found for vehicle' });
   }
+});
+
+// SSE endpoint for streaming CAN bus data
+app.get('/stream/canbus', validateApiKey, (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  sseClients.add(res);
+  
+  req.on('close', () => {
+    sseClients.delete(res);
+  });
 });
 
 app.listen(PORT, () => {

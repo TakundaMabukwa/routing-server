@@ -30,11 +30,11 @@ ws.on('message', async (data) => {
     // Cache latest vehicle data
     vehicleDataCache.set(vehicleData.Plate, vehicleData);
     
-    console.log(`Received data for vehicle ${vehicleData.Plate}:`, {
-      speed: vehicleData.Speed,
-      lat: vehicleData.Latitude,
-      lng: vehicleData.Longitude
-    });
+    // console.log(`Received data for vehicle ${vehicleData.Plate}:`, {
+    //   speed: vehicleData.Speed,
+    //   lat: vehicleData.Latitude,
+    //   lng: vehicleData.Longitude
+    // });
     
     console.log('Full data:', JSON.stringify(vehicleData, null, 2));
     

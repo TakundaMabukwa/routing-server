@@ -26,9 +26,7 @@ class EPSRewardSystem {
     this.batchTimer = null;
     this.BATCH_INTERVAL = 60000; // 60 seconds
     
-    // Fuel data tracking - store once per hour per vehicle
-    this.lastFuelStorage = new Map(); // plate -> timestamp
-    this.FUEL_STORAGE_INTERVAL = 60 * 60 * 1000; // 1 hour in milliseconds
+
     
     // Daily snapshot timer
     this.setupDailySnapshot()
@@ -794,11 +792,7 @@ class EPSRewardSystem {
       
 
       
-      // Log and store fuel data if available (hourly)
-      if (epsData.fuel_level || epsData.fuel_volume) {
-        console.log(`⛽ EPS Fuel Data - ${epsData.DriverName}: Level=${epsData.fuel_level}L, Volume=${epsData.fuel_volume}L`);
-        await this.storeFuelDataHourly(epsData);
-      }
+
       
       return data?.[0]?.id;
     } catch (error) {
@@ -859,8 +853,7 @@ class EPSRewardSystem {
           });
       }
 
-      // Store daily fuel summary
-      await this.storeDailyFuelSummary(epsData, currentDate);
+
       
       // Skip daily stats updates to reduce database calls
       // Stats can be calculated from daily performance data when needed
@@ -913,189 +906,13 @@ class EPSRewardSystem {
     }
   }
 
-  // Parse fuel data from last hex segment in rawMessage
-  parseEPSFuelData(hexMessage) {
-    if (!hexMessage || hexMessage.trim() === '') return null;
-    
-    const parts = hexMessage.split(',');
-    if (parts.length < 11) return null;
-    
-    try {
-      // Use EnergyRite structure: positions 4,6,8,10 for hex fuel data
-      const levelHex = parts[4];      
-      const volumeHex = parts[6];     
-      const tempHex = parts[8];       
-      const percentHex = parts[10];   
-      
-      console.log(`🔍 Fuel Hex - Level=${levelHex}, Volume=${volumeHex}, Temp=${tempHex}, Percent=${percentHex}`);
-      
-      return {
-        fuel_level: (parseInt(levelHex, 16) / 10),
-        fuel_volume: (parseInt(volumeHex, 16) / 10), 
-        fuel_temperature: parseInt(tempHex, 16),
-        fuel_percentage: Math.min(parseInt(percentHex, 16), 100)
-      };
-    } catch (error) {
-      return null;
-    }
-  }
 
-  // Core fuel calculations
-  calculateFuelMetrics(epsData, previousFuelData = null) {
-    // Parse fuel data ONLY from rawMessage hex data
-    let parsedFuel = null;
-    if (epsData.rawMessage) {
-      const parts = epsData.rawMessage.split('|');
-      const hexData = parts[parts.length - 1];
-      if (hexData && hexData.includes(',')) {
-        parsedFuel = this.parseEPSFuelData(hexData);
-      }
-    }
-    
-    // Use ONLY parsed hex data, ignore pre-parsed fields
-    let fuelLevel = parsedFuel?.fuel_level || 0;
-    let fuelVolume = parsedFuel?.fuel_volume || 0;
-    let fuelPercentage = parsedFuel?.fuel_percentage || 0;
-    let fuelTemp = parsedFuel?.fuel_temperature || 0;
-    
-    const metrics = {
-      fuel_level: fuelLevel,
-      fuel_volume: fuelVolume,
-      fuel_percentage: fuelPercentage,
-      fuel_temperature: fuelTemp,
-      consumption_rate: 0,
-      efficiency_kmpl: 0,
-      fuel_cost: 0,
-      theft_detected: false
-    };
 
-    if (previousFuelData) {
-      const fuelUsed = (previousFuelData.fuel_level || 0) - (epsData.fuel_level || 0);
-      const distanceTraveled = (epsData.Mileage || 0) - (previousFuelData.mileage || 0);
-      const timeElapsed = new Date(epsData.LocTime) - new Date(previousFuelData.loc_time);
-      
-      // Fuel consumption rate (L/hour)
-      if (timeElapsed > 0) {
-        metrics.consumption_rate = (fuelUsed / (timeElapsed / 3600000)).toFixed(2);
-      }
-      
-      // Fuel efficiency (km/L)
-      if (fuelUsed > 0 && distanceTraveled > 0) {
-        metrics.efficiency_kmpl = (distanceTraveled / fuelUsed).toFixed(2);
-      }
-      
-      // Fuel theft detection (sudden drop > 20L)
-      if (fuelUsed > 20 && distanceTraveled < 5) {
-        metrics.theft_detected = true;
-      }
-      
-      // Fuel cost (assuming R20/L)
-      metrics.fuel_cost = (fuelUsed * 20).toFixed(2);
-    }
 
-    return metrics;
-  }
 
-  // Store fuel data hourly
-  async storeFuelDataHourly(epsData) {
-    try {
-      // Only store if we have rawMessage with hex data
-      if (!epsData.rawMessage || !epsData.rawMessage.includes(',')) {
-        return;
-      }
-      
-      const plate = epsData.Plate;
-      const now = Date.now();
-      const lastStored = this.lastFuelStorage.get(plate) || 0;
-      
-      // Only store once per hour
-      if (now - lastStored < this.FUEL_STORAGE_INTERVAL) {
-        return;
-      }
-      
-      // Get previous fuel data for calculations
-      const { data: previousData } = await supabase
-        .from('eps_fuel_data')
-        .select('*')
-        .eq('plate', plate)
-        .order('loc_time', { ascending: false })
-        .limit(1);
-      
-      const fuelMetrics = this.calculateFuelMetrics(epsData, previousData?.[0]);
-      
-      // Don't update if no fuel data was parsed
-      if (!fuelMetrics.fuel_level && !fuelMetrics.fuel_volume) {
-        return;
-      }
-      
-      const { error } = await supabase
-        .from('eps_fuel_data')
-        .upsert({
-          plate: epsData.Plate,
-          driver_name: epsData.DriverName,
-          fuel_level: fuelMetrics.fuel_level,
-          fuel_volume: fuelMetrics.fuel_volume,
-          fuel_temperature: fuelMetrics.fuel_temperature,
-          fuel_percentage: fuelMetrics.fuel_percentage,
-          engine_status: epsData.engine_status,
-          loc_time: epsData.LocTime || new Date().toISOString(),
-          latitude: epsData.Latitude,
-          longitude: epsData.Longitude
-        }, {
-          onConflict: 'plate'
-        });
-      
-      if (error) throw error;
-      
-      // Update last storage time
-      this.lastFuelStorage.set(plate, now);
-      
-      console.log(`✅ Stored fuel data for ${epsData.Plate}: Level=${fuelMetrics.fuel_level}L, Volume=${fuelMetrics.fuel_volume}L`);
-    } catch (error) {
-      console.error('Error storing EPS fuel data:', error);
-    }
-  }
 
-  // Store daily fuel summary
-  async storeDailyFuelSummary(epsData, date) {
-    try {
-      const { data: dailyFuel } = await supabase
-        .from('eps_fuel_data')
-        .select('*')
-        .eq('plate', epsData.Plate)
-        .gte('loc_time', `${date}T00:00:00`)
-        .lt('loc_time', `${date}T23:59:59`)
-        .order('loc_time');
-      
-      if (dailyFuel.length < 2) return;
-      
-      const startFuel = dailyFuel[0].fuel_level || 0;
-      const endFuel = dailyFuel[dailyFuel.length - 1].fuel_level || 0;
-      const totalConsumption = startFuel - endFuel;
-      const avgEfficiency = dailyFuel.reduce((sum, d) => sum + (parseFloat(d.efficiency_kmpl) || 0), 0) / dailyFuel.length;
-      const totalCost = dailyFuel.reduce((sum, d) => sum + (parseFloat(d.fuel_cost) || 0), 0);
-      const theftIncidents = dailyFuel.filter(d => d.theft_detected).length;
-      
-      await supabase
-        .from('eps_daily_fuel_summary')
-        .upsert({
-          plate: epsData.Plate,
-          driver_name: epsData.DriverName,
-          date: date,
-          start_fuel_level: startFuel,
-          end_fuel_level: endFuel,
-          total_consumption: totalConsumption,
-          average_efficiency: avgEfficiency.toFixed(2),
-          total_fuel_cost: totalCost.toFixed(2),
-          theft_incidents: theftIncidents,
-          last_update: new Date().toISOString()
-        }, {
-          onConflict: 'plate,date'
-        });
-    } catch (error) {
-      console.error('Error storing daily fuel summary:', error);
-    }
-  }
+
+
 
   // Get driver performance data for reports
   async getDriverPerformanceReport(driverName, startDate, endDate) {
