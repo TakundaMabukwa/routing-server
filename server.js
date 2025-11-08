@@ -8,8 +8,10 @@ const { parseWithNames } = require('./fuel-parsing/canbus-parser-v2');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const WS_PORT = process.env.WS_PORT || 3002;
 const path = require('path');
 const Database = require('better-sqlite3');
+const { WebSocketServer } = require('ws');
 
 // Middleware
 app.use(express.json());
@@ -110,8 +112,16 @@ ws.on('message', async (data) => {
           canBusCache.set(vehicleData.Plate, streamData);
           saveCanBusData(vehicleData.Plate, streamData);
           
+          // Broadcast to SSE clients
           sseClients.forEach(client => {
             client.write(`data: ${JSON.stringify(streamData)}\n\n`);
+          });
+          
+          // Broadcast to WebSocket clients
+          wsClients.forEach(client => {
+            if (client.readyState === 1) {
+              client.send(JSON.stringify({ type: 'update', data: streamData }));
+            }
           });
         }
       }
@@ -217,6 +227,32 @@ app.get('/stream/canbus', validateApiKey, (req, res) => {
   });
 });
 
+// WebSocket server for outgoing data
+const wss = new WebSocketServer({ port: WS_PORT });
+const wsClients = new Set();
+
+wss.on('connection', (ws, req) => {
+  const apiKey = new URL(req.url, 'ws://localhost').searchParams.get('key');
+  
+  if (apiKey !== (process.env.CANBUS_API_KEY || 'K9mX^7pQ')) {
+    ws.close(1008, 'Unauthorized');
+    return;
+  }
+  
+  wsClients.add(ws);
+  console.log(`WebSocket client connected (${wsClients.size} total)`);
+  
+  // Send current snapshot on connect
+  const snapshot = Array.from(canBusCache.values());
+  ws.send(JSON.stringify({ type: 'snapshot', data: snapshot }));
+  
+  ws.on('close', () => {
+    wsClients.delete(ws);
+    console.log(`WebSocket client disconnected (${wsClients.size} remaining)`);
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`Express server running on port ${PORT}`);
+  console.log(`WebSocket server running on port ${WS_PORT}`);
 });
