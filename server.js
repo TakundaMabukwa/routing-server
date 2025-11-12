@@ -29,61 +29,81 @@ const sseClients = new Set();
 // Cache latest vehicle data
 const vehicleDataCache = new Map();
 
-// SQLite database
-const db = new Database(path.join(__dirname, 'canbus.db'));
+// SQLite databases per company
+const databases = {
+  eps: new Database(path.join(__dirname, 'canbus-eps.db')),
+  maysene: new Database(path.join(__dirname, 'canbus-maysene.db'))
+};
 
-// Create table
-db.exec(`
-  CREATE TABLE IF NOT EXISTS canbus (
-    plate TEXT PRIMARY KEY,
-    data TEXT NOT NULL,
-    timestamp TEXT NOT NULL
-  )
-`);
-
-// Memory cache
-const canBusCache = new Map();
-
-// Load existing data into cache
-const rows = db.prepare('SELECT * FROM canbus').all();
-rows.forEach(row => {
-  const vehicleData = JSON.parse(row.data);
-  canBusCache.set(row.plate, vehicleData);
+// Create tables for both companies
+Object.values(databases).forEach(db => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS canbus (
+      plate TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      timestamp TEXT NOT NULL
+    )
+  `);
 });
-console.log(`Loaded CAN bus data for ${canBusCache.size} vehicles`);
 
-// Prepared statement for upsert
-const upsertStmt = db.prepare(`
-  INSERT INTO canbus (plate, data, timestamp) 
-  VALUES (?, ?, ?)
-  ON CONFLICT(plate) DO UPDATE SET data = ?, timestamp = ?
-`);
+// Memory caches per company
+const canBusCaches = {
+  eps: new Map(),
+  maysene: new Map()
+};
 
-function saveCanBusData(plate, data) {
+// Load existing data into caches
+Object.entries(databases).forEach(([company, db]) => {
+  const rows = db.prepare('SELECT * FROM canbus').all();
+  rows.forEach(row => {
+    const vehicleData = JSON.parse(row.data);
+    canBusCaches[company].set(row.plate, vehicleData);
+  });
+  console.log(`Loaded CAN bus data for ${canBusCaches[company].size} ${company} vehicles`);
+});
+
+// Prepared statements per company
+const upsertStmts = {};
+Object.entries(databases).forEach(([company, db]) => {
+  upsertStmts[company] = db.prepare(`
+    INSERT INTO canbus (plate, data, timestamp) 
+    VALUES (?, ?, ?)
+    ON CONFLICT(plate) DO UPDATE SET data = ?, timestamp = ?
+  `);
+});
+
+function saveCanBusData(company, plate, data) {
   const dataStr = JSON.stringify(data);
   const timestamp = data.timestamp;
-  upsertStmt.run(plate, dataStr, timestamp, dataStr, timestamp);
+  upsertStmts[company].run(plate, dataStr, timestamp, dataStr, timestamp);
 }
 
 // Initialize EPS Reward System
 const rewardSystem = new EPSRewardSystem();
 
-// Initialize Trip Monitor
-const tripMonitor = new TripMonitor();
+// Initialize Trip Monitors per company
+const tripMonitors = {
+  eps: new TripMonitor('eps'),
+  maysene: new TripMonitor('maysene')
+};
 
-// WebSocket client connection
-const ws = new WebSocket(process.env.WEBSOCKET_URL);
+// WebSocket connections per company
+const websockets = {
+  eps: new WebSocket(process.env.EPS_WEBSOCKET_URL),
+  maysene: new WebSocket(process.env.MAYSENE_WEBSOCKET_URL)
+};
 
-ws.on('open', () => {
-  console.log('Connected to WebSocket:', process.env.WEBSOCKET_URL);
-});
+function setupWebSocket(company, ws) {
+  ws.on('open', () => {
+    console.log(`${company.toUpperCase()} WebSocket connected`);
+  });
 
-ws.on('message', async (data) => {
+  ws.on('message', async (data) => {
   try {
     const vehicleData = JSON.parse(data.toString());
     
-    // Cache latest vehicle data
-    vehicleDataCache.set(vehicleData.Plate, vehicleData);
+    // Cache latest vehicle data with company prefix
+    vehicleDataCache.set(`${company}:${vehicleData.Plate}`, vehicleData);
     
     // console.log(`Received data for vehicle ${vehicleData.Plate}:`, {
     //   speed: vehicleData.Speed,
@@ -113,8 +133,8 @@ ws.on('message', async (data) => {
           };
           
           // Store in CAN bus cache and database
-          canBusCache.set(vehicleData.Plate, streamData);
-          saveCanBusData(vehicleData.Plate, streamData);
+          canBusCaches[company].set(vehicleData.Plate, streamData);
+          saveCanBusData(company, vehicleData.Plate, streamData);
           
           // Broadcast to SSE clients
           sseClients.forEach(client => {
@@ -143,24 +163,29 @@ ws.on('message', async (data) => {
     // Process through trip monitoring system
     if (vehicleData.DriverName && vehicleData.Latitude && vehicleData.Longitude) {
       try {
-        await tripMonitor.processVehicleData(vehicleData);
+        await tripMonitors[company].processVehicleData(vehicleData);
       } catch (error) {
         console.error('Error processing trip monitoring data:', error);
       }
     }
     
   } catch (error) {
-    console.error('Error parsing WebSocket data:', error);
+    console.error(`${company.toUpperCase()} WebSocket error:`, error);
   }
-});
+  });
 
-ws.on('error', (error) => {
-  console.error('WebSocket error:', error);
-});
+  ws.on('error', (error) => {
+    console.error(`${company.toUpperCase()} WebSocket error:`, error);
+  });
 
-ws.on('close', () => {
-  console.log('WebSocket connection closed');
-});
+  ws.on('close', () => {
+    console.log(`${company.toUpperCase()} WebSocket closed`);
+  });
+}
+
+// Setup both WebSocket connections
+setupWebSocket('eps', websockets.eps);
+setupWebSocket('maysene', websockets.maysene);
 
 // Serve the stream client
 app.get('/stream-client', (req, res) => {
@@ -180,10 +205,16 @@ app.get('/', (req, res) => {
 app.use('/api/eps-rewards', epsRoutes);
 app.use('/api/stats', statsRoutes);
 
-// Get trip route points by trip ID
+// Get trip route points by trip ID (with company parameter)
 app.get('/api/trips/:tripId/route', (req, res) => {
   const tripId = parseInt(req.params.tripId);
-  const routeData = tripMonitor.getRoutePoints(tripId);
+  const company = req.query.company || 'eps';
+  
+  if (!tripMonitors[company]) {
+    return res.status(400).json({ error: 'Invalid company' });
+  }
+  
+  const routeData = tripMonitors[company].getRoutePoints(tripId);
   if (routeData) {
     res.json(routeData);
   } else {
@@ -214,7 +245,13 @@ app.get('/vehicles', (req, res) => {
 
 // Get all trip routes (optional - for debugging)
 app.get('/api/trips/routes/all', (req, res) => {
-  const allRoutes = tripMonitor.db.prepare('SELECT trip_id, company, created_at, updated_at FROM trip_routes').all();
+  const company = req.query.company || 'eps';
+  
+  if (!tripMonitors[company]) {
+    return res.status(400).json({ error: 'Invalid company' });
+  }
+  
+  const allRoutes = tripMonitors[company].db.prepare('SELECT trip_id, company, created_at, updated_at FROM trip_routes').all();
   res.json(allRoutes);
 });
 
@@ -231,13 +268,25 @@ function validateApiKey(req, res, next) {
 
 // Get latest CAN bus data snapshot
 app.get('/canbus/snapshot', validateApiKey, (req, res) => {
-  const snapshot = Array.from(canBusCache.values());
+  const company = req.query.company || 'eps';
+  
+  if (!canBusCaches[company]) {
+    return res.status(400).json({ error: 'Invalid company' });
+  }
+  
+  const snapshot = Array.from(canBusCaches[company].values());
   res.json(snapshot);
 });
 
 // Get CAN bus data for specific vehicle
 app.get('/canbus/:plate', validateApiKey, (req, res) => {
-  const data = canBusCache.get(req.params.plate);
+  const company = req.query.company || 'eps';
+  
+  if (!canBusCaches[company]) {
+    return res.status(400).json({ error: 'Invalid company' });
+  }
+  
+  const data = canBusCaches[company].get(req.params.plate);
   if (data) {
     res.json(data);
   } else {
@@ -274,8 +323,10 @@ wss.on('connection', (ws, req) => {
   wsClients.add(ws);
   console.log(`WebSocket client connected (${wsClients.size} total)`);
   
-  // Send current snapshot on connect
-  const snapshot = Array.from(canBusCache.values());
+  // Send current snapshot on connect (combined from both companies)
+  const epsSnapshot = Array.from(canBusCaches.eps.values());
+  const mayseneSnapshot = Array.from(canBusCaches.maysene.values());
+  const snapshot = [...epsSnapshot, ...mayseneSnapshot];
   ws.send(JSON.stringify({ type: 'snapshot', data: snapshot }));
   
   ws.on('close', () => {

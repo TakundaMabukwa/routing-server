@@ -5,11 +5,16 @@ const Database = require('better-sqlite3');
 const path = require('path');
 
 class TripMonitor {
-  constructor() {
-    this.supabase = createClient(
-      process.env.NEXT_PUBLIC_EPS_SUPABASE_URL,
-      process.env.NEXT_PUBLIC_EPS_SUPABASE_ANON_KEY
-    );
+  constructor(company = 'eps') {
+    this.company = company;
+    const supabaseUrl = company === 'maysene' 
+      ? process.env.NEXT_PUBLIC_MAYSENE_SUPABASE_URL
+      : process.env.NEXT_PUBLIC_EPS_SUPABASE_URL;
+    const supabaseKey = company === 'maysene'
+      ? process.env.NEXT_PUBLIC_MAYSENE_SUPABASE_ANON_KEY
+      : process.env.NEXT_PUBLIC_EPS_SUPABASE_ANON_KEY;
+    
+    this.supabase = createClient(supabaseUrl, supabaseKey);
     this.activeTrips = new Map();
     this.stationaryDrivers = new Map();
     this.matchedDrivers = new Map();
@@ -27,7 +32,7 @@ class TripMonitor {
   }
 
   initLocalDB() {
-    const dbPath = path.join(__dirname, '..', 'trip-routes.db');
+    const dbPath = path.join(__dirname, '..', `trip-routes-${this.company}.db`);
     this.db = new Database(dbPath);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS trip_routes (
@@ -278,7 +283,7 @@ class TripMonitor {
           .run(JSON.stringify(points), new Date().toISOString(), tripId);
       } else {
         this.db.prepare('INSERT INTO trip_routes (trip_id, company, route_points, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
-          .run(tripId, 'eps', JSON.stringify([newPoint]), new Date().toISOString(), new Date().toISOString());
+          .run(tripId, this.company, JSON.stringify([newPoint]), new Date().toISOString(), new Date().toISOString());
       }
       
       if (mileage) {
