@@ -5,6 +5,7 @@ const EPSRewardSystem = require('./reward-system/eps-reward-system');
 const epsRoutes = require('./reward-system/eps-rewards');
 const statsRoutes = require('./reward-system/stats-routes');
 const { parseWithNames } = require('./fuel-parsing/canbus-parser-v2');
+const TripMonitor = require('./services/trip-monitor');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -66,6 +67,9 @@ function saveCanBusData(plate, data) {
 
 // Initialize EPS Reward System
 const rewardSystem = new EPSRewardSystem();
+
+// Initialize Trip Monitor
+const tripMonitor = new TripMonitor();
 
 // WebSocket client connection
 const ws = new WebSocket(process.env.WEBSOCKET_URL);
@@ -136,6 +140,15 @@ ws.on('message', async (data) => {
       }
     }
     
+    // Process through trip monitoring system
+    if (vehicleData.DriverName && vehicleData.Latitude && vehicleData.Longitude) {
+      try {
+        await tripMonitor.processVehicleData(vehicleData);
+      } catch (error) {
+        console.error('Error processing trip monitoring data:', error);
+      }
+    }
+    
   } catch (error) {
     console.error('Error parsing WebSocket data:', error);
   }
@@ -167,6 +180,19 @@ app.get('/', (req, res) => {
 app.use('/api/eps-rewards', epsRoutes);
 app.use('/api/stats', statsRoutes);
 
+// Get trip route points by trip ID
+app.get('/api/trips/:tripId/route', (req, res) => {
+  const tripId = parseInt(req.params.tripId);
+  const routeData = tripMonitor.getRoutePoints(tripId);
+  if (routeData) {
+    res.json(routeData);
+  } else {
+    res.status(404).json({ error: 'Trip route not found' });
+  }
+});
+
+
+
 // Get cached vehicle data
 app.get('/vehicles/:plate', (req, res) => {
   const vehicleData = vehicleDataCache.get(req.params.plate);
@@ -184,6 +210,12 @@ app.get('/vehicles', (req, res) => {
     ...data
   }));
   res.json(vehicles);
+});
+
+// Get all trip routes (optional - for debugging)
+app.get('/api/trips/routes/all', (req, res) => {
+  const allRoutes = tripMonitor.db.prepare('SELECT trip_id, company, created_at, updated_at FROM trip_routes').all();
+  res.json(allRoutes);
 });
 
 // API key validation
