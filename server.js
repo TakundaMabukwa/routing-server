@@ -3,6 +3,7 @@ const express = require('express');
 const WebSocket = require('ws');
 const EPSRewardSystem = require('./reward-system/eps-reward-system');
 const epsRoutes = require('./reward-system/eps-rewards');
+const mayseneRoutes = require('./reward-system/maysene-rewards');
 const statsRoutes = require('./reward-system/stats-routes');
 const { parseWithNames } = require('./fuel-parsing/canbus-parser-v2');
 const TripMonitor = require('./services/trip-monitor');
@@ -211,6 +212,7 @@ app.get('/', (req, res) => {
 
 // Mount EPS reward system routes
 app.use('/api/eps-rewards', epsRoutes);
+app.use('/api/maysene-rewards', mayseneRoutes);
 app.use('/api/stats', statsRoutes);
 
 // Get trip route points by trip ID (with company parameter)
