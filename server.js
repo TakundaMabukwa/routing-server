@@ -6,7 +6,7 @@ const epsRoutes = require('./reward-system/eps-rewards');
 const mayseneRoutes = require('./reward-system/maysene-rewards');
 const statsRoutes = require('./reward-system/stats-routes');
 const { parseWithNames } = require('./fuel-parsing/canbus-parser-v2');
-const TripMonitor = require('./services/trip-monitor');
+const TripMonitor = require('./services/trip-monitor-minimal');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
