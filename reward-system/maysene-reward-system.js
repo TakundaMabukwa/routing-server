@@ -19,17 +19,10 @@ class MayseneRewardSystem {
     };
   }
 
-  // Clean driver name - remove phone numbers and trim
+  // Use driver name as-is, just like EPS
   cleanDriverName(driverName) {
     if (!driverName) return null;
-    
-    // Remove phone numbers (10 digits)
-    let cleaned = driverName.replace(/\d{10}/g, '').trim();
-    
-    // Remove extra spaces
-    cleaned = cleaned.replace(/\s+/g, ' ').trim();
-    
-    return cleaned || null;
+    return driverName.trim();
   }
 
   // Get or create driver rewards record (case-insensitive)
@@ -37,7 +30,7 @@ class MayseneRewardSystem {
     try {
       const cleanedName = this.cleanDriverName(driverName);
       
-      if (!cleanedName || cleanedName.toUpperCase() === 'UNKNOWN' || cleanedName.toUpperCase() === 'NULL') {
+      if (!cleanedName) {
         return null;
       }
       
