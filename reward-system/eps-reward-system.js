@@ -63,8 +63,8 @@ class EPSRewardSystem {
   // Process violation and deduct points after threshold
   async processViolation(driverName, plate, violationType) {
     try {
-      // Skip UNKNOWN or null drivers
-      if (!driverName || driverName.toUpperCase() === 'UNKNOWN' || driverName.toUpperCase() === 'NULL') {
+      // Skip invalid driver names
+      if (!this.isValidDriverName(driverName)) {
         return null;
       }
       
@@ -150,11 +150,28 @@ class EPSRewardSystem {
     return 'Critical';                    // 0-39 points
   }
 
+  // Validate if string is a real name (not address)
+  isValidDriverName(name) {
+    if (!name) return false;
+    const upper = name.toUpperCase();
+    
+    // Skip invalid names
+    if (upper === 'UNKNOWN' || upper === 'NULL') return false;
+    
+    // Skip if it looks like an address
+    if (name.includes('Street') || name.includes('Road') || name.includes('Avenue') ||
+        name.includes('Drive') || name.includes('South Africa') || name.includes(',')) {
+      return false;
+    }
+    
+    return true;
+  }
+
   // Get or create driver rewards record
   async getDriverRewards(driverName) {
     try {
-      // Skip UNKNOWN or null drivers
-      if (!driverName || driverName.toUpperCase() === 'UNKNOWN' || driverName.toUpperCase() === 'NULL') {
+      // Skip invalid driver names
+      if (!this.isValidDriverName(driverName)) {
         return null;
       }
       
@@ -174,7 +191,8 @@ class EPSRewardSystem {
           onConflict: 'driver_name',
           ignoreDuplicates: true
         })
-        .select();
+        .select()
+        .ilike('driver_name', driverName);
       
       if (error) throw error;
       
@@ -238,7 +256,7 @@ class EPSRewardSystem {
           ...updates,
           last_updated: new Date().toISOString()
         })
-        .eq('driver_name', driverName)
+        .ilike('driver_name', driverName)
         .select()
         .single();
       

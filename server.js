@@ -81,6 +81,10 @@ function saveCanBusData(company, plate, data) {
 // Initialize EPS Reward System
 const rewardSystem = new EPSRewardSystem();
 
+// Initialize Maysene Reward System
+const MayseneRewardSystem = require('./reward-system/maysene-reward-system');
+const mayseneRewardSystem = new MayseneRewardSystem();
+
 // Initialize Trip Monitors per company
 const tripMonitors = {
   eps: new TripMonitor('eps'),
@@ -151,12 +155,16 @@ function setupWebSocket(company, ws) {
       }
     }
     
-    // Process through EPS reward system if driver name exists
+    // Process through reward system if driver name exists
     if (vehicleData.DriverName && vehicleData.Plate) {
       try {
-        const result = await rewardSystem.processEPSData(vehicleData);
+        if (company === 'eps') {
+          const result = await rewardSystem.processEPSData(vehicleData);
+        } else if (company === 'maysene') {
+          const result = await mayseneRewardSystem.processMayseneData(vehicleData);
+        }
       } catch (error) {
-        console.error('Error processing EPS data:', error);
+        console.error(`Error processing ${company.toUpperCase()} reward data:`, error);
       }
     }
     
