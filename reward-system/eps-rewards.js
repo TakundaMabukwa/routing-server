@@ -35,17 +35,23 @@ router.get('/test', async (req, res) => {
   }
 });
 
-// Get all driver performance records (daily summaries)
+// Get all driver performance records (daily summaries) - CACHED
+const cache = require('../middleware/supabase-cache');
+
 router.get('/performance', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('eps_daily_performance')
-      .select('*')
-      .order('date', { ascending: false })
-      .order('last_update_time', { ascending: false })
-      .limit(100);
+    const data = await cache.getCached('eps-performance', async () => {
+      const { data, error } = await supabase
+        .from('eps_daily_performance')
+        .select('*')
+        .order('date', { ascending: false })
+        .order('last_update_time', { ascending: false })
+        .limit(100);
+      
+      if (error) throw error;
+      return data;
+    }, 30000); // 30s cache
     
-    if (error) throw error;
     res.json(data);
   } catch (error) {
     console.error('Error getting performance data:', error);

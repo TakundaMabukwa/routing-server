@@ -6,7 +6,7 @@ const epsRoutes = require('./reward-system/eps-rewards');
 const mayseneRoutes = require('./reward-system/maysene-rewards');
 const statsRoutes = require('./reward-system/stats-routes');
 const { parseWithNames } = require('./fuel-parsing/canbus-parser-v2');
-const TripMonitor = require('./services/trip-monitor-minimal');
+const TripMonitor = require('./services/trip-monitor-ultra-minimal');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -161,9 +161,11 @@ function setupWebSocket(company, ws) {
       try {
         if (company === 'eps') {
           const result = await rewardSystem.processEPSData(vehicleData);
-        } else if (company === 'maysene') {
-          const result = await mayseneRewardSystem.processMayseneData(vehicleData);
         }
+        // Maysene reward system disabled
+        // else if (company === 'maysene') {
+        //   const result = await mayseneRewardSystem.processMayseneData(vehicleData);
+        // }
       } catch (error) {
         console.error(`Error processing ${company.toUpperCase()} reward data:`, error);
       }
@@ -215,6 +217,10 @@ app.use('/api/eps-rewards', epsRoutes);
 app.use('/api/maysene-rewards', mayseneRoutes);
 app.use('/api/stats', statsRoutes);
 
+// Mount cached trips routes
+const tripsCachedRoutes = require('./routes/trips-cached');
+app.use('/api/trips', tripsCachedRoutes);
+
 // Get trip route points by trip ID (with company parameter)
 app.get('/api/trips/:tripId/route', (req, res) => {
   const tripId = parseInt(req.params.tripId);
@@ -230,6 +236,19 @@ app.get('/api/trips/:tripId/route', (req, res) => {
   } else {
     res.status(404).json({ error: 'Trip route not found' });
   }
+});
+
+// Get unauthorized stops for a trip (from local DB)
+app.get('/api/trips/:tripId/unauthorized-stops', (req, res) => {
+  const tripId = parseInt(req.params.tripId);
+  const company = req.query.company || 'eps';
+  
+  if (!tripMonitors[company]) {
+    return res.status(400).json({ error: 'Invalid company' });
+  }
+  
+  const stops = tripMonitors[company].getUnauthorizedStops(tripId);
+  res.json({ trip_id: tripId, unauthorized_stops: stops });
 });
 
 

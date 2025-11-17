@@ -69,7 +69,7 @@ class EPSRewardSystem {
       }
       
       // Get or create driver record
-      let driver = await this.getDriverRewards(driverName);
+      let driver = await this.getDriverRewards(driverName, plate);
       
       if (!driver) return null;
       
@@ -128,8 +128,8 @@ class EPSRewardSystem {
         current_level: newLevel
       };
       
-      // IMMEDIATE update for violations, batch for regular updates
-      await this.updateDriverRewards(driverName, updateData);
+      // Batch ALL updates (including violations) to reduce Supabase calls
+      this.addToBatch(driverName, updateData);
       
       return {
         ...driver,
@@ -168,7 +168,7 @@ class EPSRewardSystem {
   }
 
   // Get or create driver rewards record
-  async getDriverRewards(driverName) {
+  async getDriverRewards(driverName, plate = 'UNKNOWN') {
     try {
       // Skip invalid driver names
       if (!this.isValidDriverName(driverName)) {
@@ -179,6 +179,7 @@ class EPSRewardSystem {
         .from('eps_driver_rewards')
         .upsert({
           driver_name: driverName,
+          plate: plate,
           current_points: this.STARTING_POINTS,
           points_deducted: 0,
           current_level: 'Gold',
@@ -824,8 +825,8 @@ class EPSRewardSystem {
     try {
       const currentDate = new Date(epsData.LocTime).toISOString().split('T')[0];
       
-      // Only update daily performance if there are violations or every 60 seconds
-      if (violations.length > 0 || Math.random() < 0.017) { // ~1.7% chance = 60 second average
+      // Only update daily performance if there are violations or every 5 minutes
+      if (violations.length > 0 || Math.random() < 0.0033) { // ~0.33% chance = 5 minute average
         await supabase
           .from('eps_daily_performance')
           .upsert({
