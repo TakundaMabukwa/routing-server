@@ -26,7 +26,13 @@ class EPSRewardSystem {
     this.batchTimer = null;
     this.BATCH_INTERVAL = 60000; // 60 seconds
     
-
+    // Rate limiting to reduce database calls
+    this.lastProcessed = new Map(); // Track last processing time per vehicle
+    this.PROCESSING_INTERVAL = 30000; // 30 seconds between processing same vehicle
+    
+    // Driver cache to reduce database lookups
+    this.driverCache = new Map();
+    this.CACHE_DURATION = 300000; // 5 minutes cache
     
     // Daily snapshot timer
     this.setupDailySnapshot()
@@ -175,6 +181,13 @@ class EPSRewardSystem {
         return null;
       }
       
+      // Check cache first
+      const cacheKey = driverName.toLowerCase();
+      const cached = this.driverCache.get(cacheKey);
+      if (cached && (Date.now() - cached.timestamp) < this.CACHE_DURATION) {
+        return cached.data;
+      }
+      
       const { data, error } = await supabase
         .from('eps_driver_rewards')
         .upsert({
@@ -199,7 +212,11 @@ class EPSRewardSystem {
       
       const driver = data?.[0];
       if (driver) {
-
+        // Cache the result
+        this.driverCache.set(cacheKey, {
+          data: driver,
+          timestamp: Date.now()
+        });
       }
       return driver;
       
@@ -262,6 +279,16 @@ class EPSRewardSystem {
         .single();
       
       if (error) throw error;
+      
+      // Update cache with new data
+      if (data) {
+        const cacheKey = driverName.toLowerCase();
+        this.driverCache.set(cacheKey, {
+          data: data,
+          timestamp: Date.now()
+        });
+      }
+      
       return data;
       
     } catch (error) {
@@ -322,16 +349,22 @@ class EPSRewardSystem {
         Address: address
       } = epsData;
 
+      // Rate limiting: only process same vehicle every 30 seconds
+      const now = Date.now();
+      const lastTime = this.lastProcessed.get(plate) || 0;
+      if (now - lastTime < this.PROCESSING_INTERVAL) {
+        return null; // Skip processing to reduce database calls
+      }
+      this.lastProcessed.set(plate, now);
+
       // Check if vehicle is actually driving
       const isDriving = this.isVehicleDriving(epsData);
       
       if (!isDriving) {
-
         return null;
       }
 
-      // Store EPS vehicle data first (UPSERT - insert once, then update)
-      await this.storeEPSVehicleData(epsData);
+      // Skip storing vehicle data to reduce database calls
 
       // Process violations and deduct points (new system)
       const violations = await this.processViolations(epsData);
@@ -744,89 +777,15 @@ class EPSRewardSystem {
   }
 
 
-  // Store EPS vehicle data in eps_vehicles table (UPSERT)
-  async storeEPSVehicleData(epsData) {
-    try {
-      const { Plate } = epsData;
-      
-      if (!Plate) {
-        throw new Error('Plate is required for EPS vehicle operations');
-      }
-      
-      // Get current vehicle data to check for engine status changes
-      const { data: currentVehicle, error: selectError } = await supabase
-        .from('eps_vehicles')
-        .select('name_event, engine_status')
-        .eq('plate', Plate)
-        .maybeSingle();
-      
-      const previousNameEvent = currentVehicle?.name_event;
-      const previousEngineStatus = currentVehicle?.engine_status;
-      
-      // Determine engine status from NameEvent
-      let engineStatus = null;
-      const nameEvent = epsData.NameEvent ? epsData.NameEvent.toUpperCase() : '';
-      
-      if (nameEvent.includes('ENGINE ON') || nameEvent.includes('IGNITION ON')) {
-        engineStatus = 'ON';
-      } else if (nameEvent.includes('ENGINE OFF') || nameEvent.includes('IGNITION OFF')) {
-        engineStatus = 'OFF';
-      } else if (nameEvent.includes('VEHICLE IN MOTION')) {
-        engineStatus = 'MOVING';
-      }
-      
-      // Log new name events
 
-      
-      // Update existing driver record by driver_name
-      const { data, error } = await supabase
-        .from('eps_vehicles')
-        .upsert({
-          plate: Plate,
-          driver_name: epsData.DriverName,
-          speed: epsData.Speed || 0,
-          latitude: epsData.Latitude,
-          longitude: epsData.Longitude,
-          loc_time: epsData.LocTime,
-          mileage: epsData.Mileage || 0,
-          geozone: epsData.Geozone,
-          address: epsData.Address,
-          name_event: epsData.NameEvent,
-          statuses: epsData.Statuses,
-          fuel_level: epsData.fuel_level,
-          fuel_volume: epsData.fuel_volume,
-          fuel_temperature: epsData.fuel_temperature,
-          fuel_percentage: epsData.fuel_percentage,
-          engine_status: engineStatus || epsData.engine_status,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'driver_name'
-        })
-        .select('id');
-      
-      if (error) {
-        console.error('Error updating vehicle:', error);
-        return null;
-      }
-      
-
-      
-
-      
-      return data?.[0]?.id;
-    } catch (error) {
-      console.error('Error storing EPS vehicle data:', error);
-      throw error;
-    }
-  }
 
   // Store data in Supabase (reduced frequency)
   async storeInSupabase(epsData, violations, performance, driverScore, dailyDistance = 0, drivingHours = {}) {
     try {
       const currentDate = new Date(epsData.LocTime).toISOString().split('T')[0];
       
-      // Only update daily performance if there are violations or every 5 minutes
-      if (violations.length > 0 || Math.random() < 0.0033) { // ~0.33% chance = 5 minute average
+      // Only update daily performance if there are violations or rarely for status updates
+      if (violations.length > 0 || Math.random() < 0.01) { // 1% chance = much less frequent updates
         await supabase
           .from('eps_daily_performance')
           .upsert({
@@ -883,47 +842,7 @@ class EPSRewardSystem {
     }
   }
 
-  // Get engine ON/OFF times for the day
-  async getEngineOnOffTimes(plate, date) {
-    try {
-      // Get first engine ON time of the day
-      const { data: engineOnData, error: onError } = await supabase
-        .from('eps_vehicles')
-        .select('loc_time')
-        .eq('plate', plate)
-        .gte('loc_time', `${date}T00:00:00`)
-        .lt('loc_time', `${date}T23:59:59`)
-        .or('name_event.ilike.%ENGINE ON%,name_event.ilike.%IGNITION ON%')
-        .order('loc_time', { ascending: true })
-        .limit(1);
-      
-      if (onError) throw onError;
-      
-      // Get last engine OFF time of the day
-      const { data: engineOffData, error: offError } = await supabase
-        .from('eps_vehicles')
-        .select('loc_time')
-        .eq('plate', plate)
-        .gte('loc_time', `${date}T00:00:00`)
-        .lt('loc_time', `${date}T23:59:59`)
-        .or('name_event.ilike.%ENGINE OFF%,name_event.ilike.%IGNITION OFF%')
-        .order('loc_time', { ascending: false })
-        .limit(1);
-      
-      if (offError) throw offError;
-      
-      return {
-        engineOnTime: engineOnData.length > 0 ? engineOnData[0].loc_time : null,
-        engineOffTime: engineOffData.length > 0 ? engineOffData[0].loc_time : null
-      };
-    } catch (error) {
-      console.error('Error getting engine ON/OFF times:', error);
-      return {
-        engineOnTime: null,
-        engineOffTime: null
-      };
-    }
-  }
+
 
 
 
