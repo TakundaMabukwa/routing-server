@@ -21,18 +21,12 @@ class EPSRewardSystem {
       OTHER: 4            // 4 other violations before deduction
     };
     
-    // Batch update system
-    this.pendingUpdates = new Map();
-    this.batchTimer = null;
-    this.BATCH_INTERVAL = 60000; // 60 seconds
+    // Local driver state (in-memory only)
+    this.driverStates = new Map();
     
-    // Rate limiting to reduce database calls
-    this.lastProcessed = new Map(); // Track last processing time per vehicle
-    this.PROCESSING_INTERVAL = 30000; // 30 seconds between processing same vehicle
-    
-    // Driver cache to reduce database lookups
-    this.driverCache = new Map();
-    this.CACHE_DURATION = 300000; // 5 minutes cache
+    // Only write to database when violations occur or daily
+    this.lastDatabaseWrite = new Map();
+    this.DATABASE_WRITE_COOLDOWN = 24 * 60 * 60 * 1000; // 24 hours
     
     // Daily snapshot timer
     this.setupDailySnapshot()
@@ -66,87 +60,7 @@ class EPSRewardSystem {
     return new Date(now.getTime() + (this.serverTimeOffset * 60 * 60 * 1000));
   }
 
-  // Process violation and deduct points after threshold
-  async processViolation(driverName, plate, violationType) {
-    try {
-      // Skip invalid driver names
-      if (!this.isValidDriverName(driverName)) {
-        return null;
-      }
-      
-      // Get or create driver record
-      let driver = await this.getDriverRewards(driverName, plate);
-      
-      if (!driver) return null;
-      
-      // Map violation types to database fields
-      const violationFields = {
-        'SPEED': 'speed_violations_count',
-        'HARSH_BRAKING': 'harsh_braking_count', 
-        'NIGHT_DRIVING': 'night_driving_count',
-        'ROUTE': 'route_violations_count',
-        'OTHER': 'other_violations_count'
-      };
-      
-      const thresholdFields = {
-        'SPEED': 'speed_threshold_exceeded',
-        'HARSH_BRAKING': 'braking_threshold_exceeded',
-        'NIGHT_DRIVING': 'night_threshold_exceeded', 
-        'ROUTE': 'route_threshold_exceeded',
-        'OTHER': 'other_threshold_exceeded'
-      };
-      
-      const violationField = violationFields[violationType];
-      const thresholdField = thresholdFields[violationType];
-      
-      if (!violationField) {
-        console.error(`Unknown violation type: ${violationType}`);
-        return driver;
-      }
-      
-      // Increment violation count
-      const currentCount = (driver[violationField] || 0) + 1;
-      const threshold = this.VIOLATION_THRESHOLDS[violationType];
-      
-      let pointsDeducted = 0;
-      let thresholdExceeded = driver[thresholdField] || false;
-      
-      // Deduct point only after threshold exceeded
-      if (currentCount > threshold) {
-        pointsDeducted = this.POINTS_PER_VIOLATION;
-        thresholdExceeded = true;
-        
-        console.log(`🚨 ${driverName} (${plate}): ${violationType} violation #${currentCount} - DEDUCTING ${pointsDeducted} point (threshold: ${threshold})`);
-      } else {
-        console.log(`⚠️ ${driverName} (${plate}): ${violationType} violation #${currentCount} - FREE PASS (${threshold - currentCount} remaining)`);
-      }
-      
-      // Update driver record using batch system
-      const newPoints = Math.max(0, (driver.current_points || this.STARTING_POINTS) - pointsDeducted);
-      const newPointsDeducted = (driver.points_deducted || 0) + pointsDeducted;
-      const newLevel = this.calculateLevel(newPoints);
-      
-      const updateData = {
-        [violationField]: currentCount,
-        [thresholdField]: thresholdExceeded,
-        current_points: newPoints,
-        points_deducted: newPointsDeducted,
-        current_level: newLevel
-      };
-      
-      // Batch ALL updates (including violations) to reduce Supabase calls
-      this.addToBatch(driverName, updateData);
-      
-      return {
-        ...driver,
-        ...updateData
-      };
-      
-    } catch (error) {
-      console.error('Error processing violation:', error);
-      throw error;
-    }
-  }
+
 
   // Calculate performance level based on remaining points
   calculateLevel(points) {
@@ -173,129 +87,27 @@ class EPSRewardSystem {
     return true;
   }
 
-  // Get or create driver rewards record
-  async getDriverRewards(driverName, plate = 'UNKNOWN') {
-    try {
-      // Skip invalid driver names
-      if (!this.isValidDriverName(driverName)) {
-        return null;
-      }
-      
-      // Check cache first
-      const cacheKey = driverName.toLowerCase();
-      const cached = this.driverCache.get(cacheKey);
-      if (cached && (Date.now() - cached.timestamp) < this.CACHE_DURATION) {
-        return cached.data;
-      }
-      
-      const { data, error } = await supabase
-        .from('eps_driver_rewards')
-        .upsert({
-          driver_name: driverName,
-          plate: plate,
-          current_points: this.STARTING_POINTS,
-          points_deducted: 0,
-          current_level: 'Gold',
-          speed_violations_count: 0,
-          harsh_braking_count: 0,
-          night_driving_count: 0,
-          route_violations_count: 0,
-          other_violations_count: 0
-        }, {
-          onConflict: 'driver_name',
-          ignoreDuplicates: true
-        })
-        .select()
-        .ilike('driver_name', driverName);
-      
-      if (error) throw error;
-      
-      const driver = data?.[0];
-      if (driver) {
-        // Cache the result
-        this.driverCache.set(cacheKey, {
-          data: driver,
-          timestamp: Date.now()
-        });
-      }
-      return driver;
-      
-    } catch (error) {
-      console.error('Error getting driver rewards:', error);
-      throw error;
+  // Get local driver state (no database calls)
+  getLocalDriverState(driverName) {
+    const key = driverName.toLowerCase();
+    if (!this.driverStates.has(key)) {
+      this.driverStates.set(key, {
+        driver_name: driverName,
+        current_points: this.STARTING_POINTS,
+        points_deducted: 0,
+        current_level: 'Gold',
+        speed_violations_count: 0,
+        harsh_braking_count: 0,
+        night_driving_count: 0,
+        route_violations_count: 0,
+        other_violations_count: 0,
+        last_updated: new Date().toISOString()
+      });
     }
+    return this.driverStates.get(key);
   }
 
-  // Add to batch updates instead of immediate update
-  addToBatch(driverName, updates) {
-    if (!this.pendingUpdates.has(driverName)) {
-      this.pendingUpdates.set(driverName, { ...updates });
-    } else {
-      // Merge updates
-      const existing = this.pendingUpdates.get(driverName);
-      this.pendingUpdates.set(driverName, { ...existing, ...updates });
-    }
-    
-    // Start batch timer if not running
-    if (!this.batchTimer) {
-      this.batchTimer = setTimeout(() => this.processBatch(), this.BATCH_INTERVAL);
-    }
-  }
-  
-  // Process all pending updates in batch
-  async processBatch() {
-    if (this.pendingUpdates.size === 0) {
-      this.batchTimer = null;
-      return;
-    }
-    
-    const updates = Array.from(this.pendingUpdates.entries());
-    this.pendingUpdates.clear();
-    this.batchTimer = null;
-    
-    try {
-      // Process all updates in parallel
-      await Promise.all(updates.map(([driverName, updateData]) => 
-        this.updateDriverRewards(driverName, updateData)
-      ));
-      
 
-    } catch (error) {
-      console.error('Error processing batch updates:', error);
-    }
-  }
-  
-  // Update driver rewards record (now used by batch processor)
-  async updateDriverRewards(driverName, updates) {
-    try {
-      const { data, error } = await supabase
-        .from('eps_driver_rewards')
-        .update({
-          ...updates,
-          last_updated: new Date().toISOString()
-        })
-        .ilike('driver_name', driverName)
-        .select()
-        .single();
-      
-      if (error) throw error;
-      
-      // Update cache with new data
-      if (data) {
-        const cacheKey = driverName.toLowerCase();
-        this.driverCache.set(cacheKey, {
-          data: data,
-          timestamp: Date.now()
-        });
-      }
-      
-      return data;
-      
-    } catch (error) {
-      console.error('Error updating driver rewards:', error);
-      throw error;
-    }
-  }
 
 
 
@@ -337,55 +149,26 @@ class EPSRewardSystem {
   // Process EPS data and calculate rewards
   async processEPSData(epsData) {
     try {
-      const {
-        Plate: plate,
-        Speed: speed,
-        Latitude: latitude,
-        Longitude: longitude,
-        LocTime: locTime,
-        Mileage: mileage,
-        Geozone: geozone,
-        DriverName: driverName,
-        Address: address
-      } = epsData;
-
-      // Rate limiting: only process same vehicle every 30 seconds
-      const now = Date.now();
-      const lastTime = this.lastProcessed.get(plate) || 0;
-      if (now - lastTime < this.PROCESSING_INTERVAL) {
-        return null; // Skip processing to reduce database calls
-      }
-      this.lastProcessed.set(plate, now);
-
-      // Check if vehicle is actually driving
-      const isDriving = this.isVehicleDriving(epsData);
+      const { Plate: plate, DriverName: driverName } = epsData;
       
-      if (!isDriving) {
+      if (!driverName || !this.isValidDriverName(driverName)) {
         return null;
       }
 
-      // Skip storing vehicle data to reduce database calls
+      // Check if vehicle is actually driving
+      if (!this.isVehicleDriving(epsData)) {
+        return null;
+      }
 
-      // Process violations and deduct points (new system)
-      const violations = await this.processViolations(epsData);
+      // Process violations in memory only
+      const violations = this.processViolationsLocal(epsData);
       
-      // Calculate performance metrics
-      const performance = this.calculatePerformance(epsData);
-      
-      // Calculate driver score based on remaining points
-      const driverScore = await this.calculateDriverScore(epsData, violations, performance);
+      // Only write to database if there are violations
+      if (violations.length > 0) {
+        await this.writeViolationsToDatabase(driverName, violations);
+      }
 
-      // Calculate daily distance
-      const currentDate = new Date(locTime).toISOString().split('T')[0];
-      const dailyDistance = await this.calculateDailyDistance(plate, currentDate);
-
-      // Calculate daily driving hours
-      const drivingHours = await this.calculateDailyDrivingHours(plate, currentDate);
-
-      // Store in Supabase
-      await this.storeInSupabase(epsData, violations, performance, driverScore, dailyDistance, drivingHours);
-
-      return { violations, performance, driverScore, dailyDistance, drivingHours, isDriving };
+      return { violations, isDriving: true };
     } catch (error) {
       console.error('Error processing EPS data:', error);
       throw error;
@@ -433,298 +216,78 @@ class EPSRewardSystem {
     return hasDrivingNameEvent || hasDrivingStatuses || hasSpeed;
   }
 
-  // Calculate daily distance moved
-  async calculateDailyDistance(plate, date) {
-    try {
-      // Get first status after midnight (initial mileage)
-      const { data: firstStatus, error: firstError } = await supabase
-        .from('eps_daily_performance')
-        .select('latest_mileage')
-        .eq('plate', plate)
-        .gte('latest_loc_time', `${date}T00:00:00`)
-        .lt('latest_loc_time', `${date}T23:59:59`)
-        .order('latest_loc_time', { ascending: true })
-        .limit(1);
-      
-      if (firstError) throw firstError;
-      
-      // Get last status before 11 PM (closing mileage)
-      const { data: lastStatus, error: lastError } = await supabase
-        .from('eps_daily_performance')
-        .select('latest_mileage')
-        .eq('plate', plate)
-        .gte('latest_loc_time', `${date}T00:00:00`)
-        .lt('latest_loc_time', `${date}T23:00:00`)
-        .order('latest_loc_time', { ascending: false })
-        .limit(1);
-      
-      if (lastError) throw lastError;
-      
-      if (firstStatus.length > 0 && lastStatus.length > 0) {
-        const initialMileage = firstStatus[0].latest_mileage;
-        const closingMileage = lastStatus[0].latest_mileage;
-        const distance = Math.max(0, closingMileage - initialMileage);
-        return isNaN(distance) ? 0 : distance;
-      }
-      
-      return 0;
-    } catch (error) {
-      console.error('Error calculating daily distance:', error);
-      return 0;
-    }
-  }
-
-  // Calculate daily driving hours and times
-  async calculateDailyDrivingHours(plate, date) {
-    try {
-      // Get first driving time (when vehicle started moving)
-      const { data: firstDriveData, error: firstError } = await supabase
-        .from('eps_daily_performance')
-        .select('latest_loc_time')
-        .eq('plate', plate)
-        .gte('latest_loc_time', `${date}T00:00:00`)
-        .lt('latest_loc_time', `${date}T23:59:59`)
-        .gt('latest_speed', 5)
-        .order('latest_loc_time', { ascending: true })
-        .limit(1);
-      
-      if (firstError) throw firstError;
-      
-      // Get last driving time (when vehicle stopped moving)
-      const { data: lastDriveData, error: lastError } = await supabase
-        .from('eps_daily_performance')
-        .select('latest_loc_time')
-        .eq('plate', plate)
-        .gte('latest_loc_time', `${date}T00:00:00`)
-        .lt('latest_loc_time', `${date}T23:59:59`)
-        .gt('latest_speed', 5)
-        .order('latest_loc_time', { ascending: false })
-        .limit(1);
-      
-      if (lastError) throw lastError;
-
-      let firstTime = null;
-      let lastTime = null;
-      let totalHours = 0;
-      let dayHours = 0;
-      let nightHours = 0;
-
-      if (firstDriveData.length > 0 && lastDriveData.length > 0) {
-        firstTime = firstDriveData[0].latest_loc_time;
-        lastTime = lastDriveData[0].latest_loc_time;
-        
-        // Calculate total driving hours
-        const timeDiff = new Date(lastTime) - new Date(firstTime);
-        totalHours = Math.round((timeDiff / (1000 * 60 * 60)) * 100) / 100; // Round to 2 decimal places
-        
-        // Calculate day vs night driving hours
-        const startHour = new Date(firstTime).getHours();
-        const endHour = new Date(lastTime).getHours();
-        
-        // Day hours (6 AM to 10 PM)
-        if (startHour >= 6 && endHour <= 22) {
-          dayHours = totalHours;
-        } else if (startHour < 6 || endHour > 22) {
-          // Night hours (10 PM to 6 AM)
-          nightHours = totalHours;
-        } else {
-          // Mixed day/night - approximate split
-          dayHours = totalHours * 0.7; // Assume 70% day driving
-          nightHours = totalHours * 0.3; // Assume 30% night driving
-        }
-      }
-
-      return {
-        firstDriveTime: firstTime,
-        lastDriveTime: lastTime,
-        totalDrivingHours: isNaN(totalHours) ? 0 : totalHours,
-        dayDrivingHours: isNaN(dayHours) ? 0 : dayHours,
-        nightDrivingHours: isNaN(nightHours) ? 0 : nightHours
-      };
-    } catch (error) {
-      console.error('Error calculating daily driving hours:', error);
-      return {
-        firstDriveTime: null,
-        lastDriveTime: null,
-        totalDrivingHours: 0,
-        dayDrivingHours: 0,
-        nightDrivingHours: 0
-      };
-    }
-  }
 
 
 
-  // Process violations and deduct points (new system)
-  async processViolations(epsData) {
+
+
+
+  // Process violations locally (no database calls)
+  processViolationsLocal(epsData) {
     const violations = [];
-    const plate = epsData.Plate;
+    const driverName = epsData.DriverName;
     
-    if (!plate) {
-      console.log('⚠️ Warning: Plate is null or empty, skipping reward processing');
-      return violations;
-    }
+    // Get or create local driver state
+    const driverState = this.getLocalDriverState(driverName);
     
-    // Only process violations if vehicle is actually driving
-    if (!this.isVehicleDriving(epsData)) {
-      return violations;
-    }
-    
-    // Speed violations - deduct points for speeding
+    // Speed violations
     if (epsData.Speed > 120) {
-      const driver = await this.processViolation(epsData.DriverName, plate, 'SPEED');
-      if (driver) {
-        violations.push({
-          type: 'speed_violation',
-          category: 'SPEED',
-          value: epsData.Speed,
-          threshold: 120,
-          violation_count: driver.speed_violations_count,
-          points_remaining: driver.current_points
-        });
+      driverState.speed_violations_count++;
+      if (driverState.speed_violations_count > this.VIOLATION_THRESHOLDS.SPEED) {
+        driverState.current_points = Math.max(0, driverState.current_points - this.POINTS_PER_VIOLATION);
+        driverState.points_deducted++;
       }
+      violations.push({
+        type: 'speed_violation',
+        category: 'SPEED',
+        value: epsData.Speed,
+        violation_count: driverState.speed_violations_count,
+        points_remaining: driverState.current_points
+      });
     }
 
     // Harsh braking violations
     if (epsData.NameEvent && epsData.NameEvent.toUpperCase().includes('HARSH BRAKING')) {
-      const driver = await this.processViolation(epsData.DriverName, plate, 'HARSH_BRAKING');
-      if (driver) {
-        violations.push({
-          type: 'harsh_braking_violation',
-          category: 'HARSH_BRAKING', 
-          value: 'harsh_braking_detected',
-          threshold: 'smooth_driving',
-          violation_count: driver.harsh_braking_count,
-          points_remaining: driver.current_points
-        });
+      driverState.harsh_braking_count++;
+      if (driverState.harsh_braking_count > this.VIOLATION_THRESHOLDS.HARSH_BRAKING) {
+        driverState.current_points = Math.max(0, driverState.current_points - this.POINTS_PER_VIOLATION);
+        driverState.points_deducted++;
       }
+      violations.push({
+        type: 'harsh_braking_violation',
+        category: 'HARSH_BRAKING',
+        violation_count: driverState.harsh_braking_count,
+        points_remaining: driverState.current_points
+      });
     }
 
-    // Night driving violations (10 PM to 5 AM) - with timezone adjustment
+    // Night driving violations
     const locTimeAdjusted = new Date(new Date(epsData.LocTime).getTime() + (this.serverTimeOffset * 60 * 60 * 1000));
     const hour = locTimeAdjusted.getHours();
     
-    // Debug logging for night driving detection
     if (hour >= 22 || hour <= 5) {
-      const driver = await this.processViolation(epsData.DriverName, plate, 'NIGHT_DRIVING');
-      if (driver) {
-        violations.push({
-          type: 'night_driving_violation',
-          category: 'NIGHT_DRIVING',
-          value: hour,
-          threshold: 'night_hours',
-          violation_count: driver.night_driving_count,
-          points_remaining: driver.current_points
-        });
+      driverState.night_driving_count++;
+      if (driverState.night_driving_count > this.VIOLATION_THRESHOLDS.NIGHT_DRIVING) {
+        driverState.current_points = Math.max(0, driverState.current_points - this.POINTS_PER_VIOLATION);
+        driverState.points_deducted++;
       }
+      violations.push({
+        type: 'night_driving_violation',
+        category: 'NIGHT_DRIVING',
+        violation_count: driverState.night_driving_count,
+        points_remaining: driverState.current_points
+      });
     }
 
-    // Route violations - DISABLED
-    // if (!this.isOnAssignedRoute(epsData.Plate, epsData.Geozone)) {
-    //   const driver = await this.processViolation(epsData.DriverName, plate, 'ROUTE');
-    //   if (driver) {
-    //     violations.push({
-    //       type: 'route_violation',
-    //       category: 'ROUTE',
-    //       value: 'off_route',
-    //       threshold: 'assigned_route',
-    //       violation_count: driver.route_violations_count,
-    //       points_remaining: driver.current_points
-    //     });
-    //   }
-    // }
-
+    // Update driver level
+    driverState.current_level = this.calculateLevel(driverState.current_points);
+    
     return violations;
   }
 
-  // Calculate performance metrics
-  calculatePerformance(epsData) {
-    const serverTime = this.getServerTime();
-    const isWeekend = serverTime.getDay() === 0 || serverTime.getDay() === 6;
-    
-    return {
-      speedCompliance: Boolean(epsData.Speed <= 80),
-      routeCompliance: true, // Always true - route violations disabled
-      timeCompliance: Boolean(this.isWithinWorkingHours(epsData.LocTime)),
-      weekendDriving: Boolean(isWeekend),
-      efficiency: this.calculateEfficiency(epsData),
-      safetyScore: this.calculateSafetyScore(epsData)
-    };
-  }
 
-  // Calculate driver score based on remaining points (new system)
-  async calculateDriverScore(epsData, violations, performance) {
-    const driverName = epsData.DriverName;
-    
-    if (!driverName) {
-      return {
-        currentPoints: this.STARTING_POINTS,
-        violationCount: 0,
-        breakdown: [],
-        level: 'Gold'
-      };
-    }
-    
-    // Get current driver status
-    const driver = await this.getDriverRewards(driverName);
-    
-    // Handle case where driver is null (UNKNOWN drivers)
-    if (!driver) {
-      return {
-        currentPoints: this.STARTING_POINTS,
-        pointsDeducted: 0,
-        violationCount: 0,
-        breakdown: [{
-          type: 'unknown_driver',
-          points: this.STARTING_POINTS,
-          description: 'Unknown driver - no score tracking'
-        }],
-        level: 'Gold',
-        violations: {
-          speed: 0,
-          harsh_braking: 0,
-          night_driving: 0,
-          route: 0,
-          other: 0
-        }
-      };
-    }
-    
-    const scoreBreakdown = [];
-    
-    // Show violation breakdown
-    violations.forEach(violation => {
-      scoreBreakdown.push({
-        type: `violation_${violation.type}`,
-        points: violation.points_remaining,
-        description: `${violation.type} (Count: ${violation.violation_count})`
-      });
-    });
-    
-    // If no violations this update, show current status
-    if (violations.length === 0) {
-      scoreBreakdown.push({
-        type: 'no_violations_this_update',
-        points: driver.current_points,
-        description: 'No violations in this update'
-      });
-    }
-    
-    return {
-      currentPoints: driver.current_points,
-      pointsDeducted: driver.points_deducted,
-      violationCount: violations.length,
-      breakdown: scoreBreakdown,
-      level: driver.current_level,
-      violations: {
-        speed: driver.speed_violations_count,
-        harsh_braking: driver.harsh_braking_count,
-        night_driving: driver.night_driving_count,
-        route: driver.route_violations_count,
-        other: driver.other_violations_count
-      }
-    };
-  }
+
+
 
   // Helper methods
   isOnAssignedRoute(plate, currentGeozone) {
@@ -779,66 +342,37 @@ class EPSRewardSystem {
 
 
 
-  // Store data in Supabase (reduced frequency)
-  async storeInSupabase(epsData, violations, performance, driverScore, dailyDistance = 0, drivingHours = {}) {
+  // Write violations to database (only when violations occur)
+  async writeViolationsToDatabase(driverName, violations) {
     try {
-      const currentDate = new Date(epsData.LocTime).toISOString().split('T')[0];
+      const now = Date.now();
+      const lastWrite = this.lastDatabaseWrite.get(driverName) || 0;
       
-      // Only update daily performance if there are violations or rarely for status updates
-      if (violations.length > 0 || Math.random() < 0.01) { // 1% chance = much less frequent updates
-        await supabase
-          .from('eps_daily_performance')
-          .upsert({
-            plate: epsData.Plate,
-            driver_name: epsData.DriverName,
-            date: currentDate,
-            latest_speed: epsData.Speed,
-            latest_latitude: epsData.Latitude,
-            latest_longitude: epsData.Longitude,
-            latest_loc_time: epsData.LocTime,
-            latest_mileage: epsData.Mileage,
-            latest_geozone: epsData.Geozone,
-            latest_address: epsData.Address,
-            speed_compliance: performance.speedCompliance,
-            route_compliance: performance.routeCompliance,
-            time_compliance: performance.timeCompliance,
-            efficiency: performance.efficiency,
-            safety_score: performance.safetyScore,
-            total_risk_score: driverScore.currentPoints,
-            risk_level: driverScore.level,
-            last_update_time: new Date().toISOString()
-          }, {
-            onConflict: 'driver_name,date'
-          });
-      }
-
-      // Only update violations if there are actual violations
-      if (violations.length > 0) {
-        await supabase
-          .from('eps_daily_violations')
-          .upsert({
-            plate: epsData.Plate,
-            driver_name: epsData.DriverName,
-            date: currentDate,
-            speeding_count: violations.filter(v => v.type === 'speed_violation').length,
-            harsh_braking_count: violations.filter(v => v.type === 'harsh_braking_violation').length,
-            excessive_night_count: violations.filter(v => v.type === 'night_driving_violation').length,
-            route_deviation_count: violations.filter(v => v.type === 'route_violation').length,
-            total_violations: violations.length,
-            last_violation_time: new Date().toISOString()
-          }, {
-            onConflict: 'driver_name,date'
-          });
-      }
-
-
+      // Always update driver rewards when violations occur
+      const driverState = this.getLocalDriverState(driverName);
       
-      // Skip daily stats updates to reduce database calls
-      // Stats can be calculated from daily performance data when needed
-
+      await supabase
+        .from('eps_driver_rewards')
+        .upsert({
+          driver_name: driverName,
+          current_points: driverState.current_points,
+          points_deducted: driverState.points_deducted,
+          current_level: driverState.current_level,
+          speed_violations_count: driverState.speed_violations_count,
+          harsh_braking_count: driverState.harsh_braking_count,
+          night_driving_count: driverState.night_driving_count,
+          route_violations_count: driverState.route_violations_count,
+          other_violations_count: driverState.other_violations_count,
+          last_updated: new Date().toISOString()
+        }, {
+          onConflict: 'driver_name'
+        });
+      
+      this.lastDatabaseWrite.set(driverName, now);
+      console.log(`🚨 ${driverName}: ${violations.length} violations - Points: ${driverState.current_points}`);
+      
     } catch (error) {
-      console.error('Supabase storage error:', error);
-      throw error;
+      console.error('Error writing violations to database:', error);
     }
   }
 
