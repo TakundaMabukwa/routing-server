@@ -1,8 +1,9 @@
+require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
 
 // Supabase client
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_EPS_SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY
 );
 
@@ -48,20 +49,6 @@ class EPSRewardSystem {
     }, msUntilMidnight);
   }
 
-  // Calculate the 2nd last day of the month
-  getSecondLastDayOfMonth(year, month) {
-    const lastDay = new Date(year, month, 0).getDate();
-    return lastDay - 1;
-  }
-
-  // Get current server time adjusted for offset
-  getServerTime() {
-    const now = new Date();
-    return new Date(now.getTime() + (this.serverTimeOffset * 60 * 60 * 1000));
-  }
-
-
-
   // Calculate performance level based on remaining points
   calculateLevel(points) {
     if (points >= 80) return 'Gold';      // 80-100 points
@@ -105,45 +92,6 @@ class EPSRewardSystem {
       });
     }
     return this.driverStates.get(key);
-  }
-
-
-
-
-
-  // Reset all drivers to 100 points (monthly reset)
-  async resetAllDriverPoints() {
-    try {
-
-      
-      const { error } = await supabase
-        .from('eps_driver_rewards')
-        .update({
-          current_points: this.STARTING_POINTS,
-          points_deducted: 0,
-          speed_violations_count: 0,
-          harsh_braking_count: 0,
-          night_driving_count: 0,
-          route_violations_count: 0,
-          other_violations_count: 0,
-          speed_threshold_exceeded: false,
-          braking_threshold_exceeded: false,
-          night_threshold_exceeded: false,
-          route_threshold_exceeded: false,
-          other_threshold_exceeded: false,
-          current_level: 'Gold',
-          last_updated: new Date().toISOString()
-        })
-        .neq('id', 0); // Update all records
-
-      if (error) throw error;
-      
-
-      return true;
-    } catch (error) {
-      console.error('Error resetting driver points:', error);
-      return false;
-    }
   }
 
   // Process EPS data and calculate rewards
@@ -216,12 +164,6 @@ class EPSRewardSystem {
     return hasDrivingNameEvent || hasDrivingStatuses || hasSpeed;
   }
 
-
-
-
-
-
-
   // Process violations locally (no database calls)
   processViolationsLocal(epsData) {
     const violations = [];
@@ -285,63 +227,6 @@ class EPSRewardSystem {
     return violations;
   }
 
-
-
-
-
-  // Helper methods
-  isOnAssignedRoute(plate, currentGeozone) {
-    // This would check against assigned routes for the plate
-    // For now, return true if geozone contains "EPS depot"
-    return currentGeozone && currentGeozone.includes('EPS depot');
-  }
-
-  isWithinWorkingHours(locTime) {
-    const locTimeAdjusted = new Date(new Date(locTime).getTime() + (this.serverTimeOffset * 60 * 60 * 1000));
-    const hour = locTimeAdjusted.getHours();
-    return hour >= 6 && hour <= 21;
-  }
-
-  calculateEfficiency(epsData) {
-    // Calculate efficiency based on speed vs distance
-    // Higher efficiency = better fuel economy
-    const optimalSpeed = 60; // km/h
-    const speedEfficiency = Math.max(0, 1 - Math.abs(epsData.Speed - optimalSpeed) / optimalSpeed);
-    return speedEfficiency;
-  }
-
-  calculateSafetyScore(epsData) {
-    let score = 1.0;
-    
-    // Deduct for speeding
-    if (epsData.Speed > 80) {
-      score -= 0.2;
-    }
-    if (epsData.Speed > 100) {
-      score -= 0.3;
-    }
-    
-    // Deduct for night driving
-    const locTimeAdjusted = new Date(new Date(epsData.LocTime).getTime() + (this.serverTimeOffset * 60 * 60 * 1000));
-    const hour = locTimeAdjusted.getHours();
-    if (hour >= 22 || hour <= 5) {
-      score -= 0.1;
-    }
-    
-    return Math.max(0, score);
-  }
-
-  // Get performance level based on remaining points
-  getPerformanceLevel(points) {
-    if (points >= 80) return 'Gold';      // 80-100 points
-    if (points >= 60) return 'Silver';    // 60-79 points
-    if (points >= 40) return 'Bronze';    // 40-59 points
-    return 'Critical';                    // 0-39 points
-  }
-
-
-
-
   // Write violations to database (only when violations occur)
   async writeViolationsToDatabase(driverName, violations) {
     try {
@@ -376,161 +261,59 @@ class EPSRewardSystem {
     }
   }
 
-
-
-
-
-
-
-
-
-
-
-  // Get driver performance data for reports
-  async getDriverPerformanceReport(driverName, startDate, endDate) {
+  // Get driver rewards (for API compatibility)
+  async getDriverRewards(driverName) {
+    // First check local state
+    const localState = this.driverStates.get(driverName.toLowerCase());
+    if (localState) {
+      return localState;
+    }
+    
+    // If not in local state, fetch from database
     try {
       const { data, error } = await supabase
-        .from('eps_daily_performance')
+        .from('eps_driver_rewards')
         .select('*')
-        .eq('driver_name', driverName)
-        .gte('latest_loc_time', startDate)
-        .lte('latest_loc_time', endDate);
+        .ilike('driver_name', driverName)
+        .single();
       
-      if (error) throw error;
+      if (error && error.code !== 'PGRST116') throw error;
       
-      if (data.length === 0) return null;
+      if (data) {
+        // Cache in local state
+        this.driverStates.set(driverName.toLowerCase(), data);
+        return data;
+      }
       
-      // Aggregate the data
-      const report = {
-        plate: data[0].plate,
-        driver_name: driverName,
-        total_kilometers: data.reduce((sum, d) => sum + (d.latest_mileage || 0), 0),
-        total_trips: data.length,
-        average_speed: data.reduce((sum, d) => sum + (d.latest_speed || 0), 0) / data.length,
-        speeding_incidents: data.filter(d => d.latest_speed > 80).length,
-        high_speed_incidents: data.filter(d => d.latest_speed > 100).length,
-        route_violations: data.filter(d => !d.route_compliance).length,
-        time_violations: data.filter(d => !d.time_compliance).length,
-        total_points: data.reduce((sum, d) => sum + (d.total_risk_score || 0), 0),
-        average_efficiency: data.reduce((sum, d) => sum + (d.efficiency || 0), 0) / data.length,
-        average_safety_score: data.reduce((sum, d) => sum + (d.safety_score || 0), 0) / data.length
-      };
-      
-      return report;
+      // Create new driver if not exists
+      return this.getLocalDriverState(driverName);
     } catch (error) {
-      console.error('Error getting driver performance report:', error);
-      throw error;
+      console.error('Error getting driver rewards:', error);
+      return this.getLocalDriverState(driverName);
     }
   }
 
-  // Get fleet performance data for reports
-  async getFleetPerformanceReport(startDate, endDate) {
-    try {
-      const { data, error } = await supabase
-        .from('eps_daily_performance')
-        .select('*')
-        .gte('latest_loc_time', startDate)
-        .lte('latest_loc_time', endDate);
-      
-      if (error) throw error;
-      
-      // Group by driver and aggregate
-      const driverMap = new Map();
-      
-      data.forEach(record => {
-        const driverName = record.driver_name;
-        if (!driverMap.has(driverName)) {
-          driverMap.set(driverName, {
-            driver_name: driverName,
-            total_kilometers: 0,
-            total_trips: 0,
-            total_speed: 0,
-            speeding_incidents: 0,
-            high_speed_incidents: 0,
-            route_violations: 0,
-            time_violations: 0,
-            total_points: 0,
-            total_efficiency: 0,
-            total_safety_score: 0
-          });
-        }
-        
-        const driver = driverMap.get(driverName);
-        driver.total_kilometers += record.latest_mileage || 0;
-        driver.total_trips += 1;
-        driver.total_speed += record.latest_speed || 0;
-        driver.speeding_incidents += record.latest_speed > 80 ? 1 : 0;
-        driver.high_speed_incidents += record.latest_speed > 100 ? 1 : 0;
-        driver.route_violations += !record.route_compliance ? 1 : 0;
-        driver.time_violations += !record.time_compliance ? 1 : 0;
-        driver.total_points += record.total_risk_score || 0;
-        driver.total_efficiency += record.efficiency || 0;
-        driver.total_safety_score += record.safety_score || 0;
-      });
-      
-      // Convert to array and calculate averages
-      const reports = Array.from(driverMap.values()).map(driver => ({
-        ...driver,
-        average_speed: driver.total_trips > 0 ? driver.total_speed / driver.total_trips : 0,
-        average_efficiency: driver.total_trips > 0 ? driver.total_efficiency / driver.total_trips : 0,
-        average_safety_score: driver.total_trips > 0 ? driver.total_safety_score / driver.total_trips : 0
-      }));
-      
-      // Sort by total points descending
-      return reports.sort((a, b) => b.total_points - a.total_points);
-    } catch (error) {
-      console.error('Error getting fleet performance report:', error);
-      throw error;
-    }
+  // Process batch (for API compatibility)
+  async processBatch() {
+    // In the new system, violations are written immediately
+    // This method exists for compatibility but does nothing
+    return Promise.resolve();
   }
 
-  // Get daily performance data for MTD reports
-  async getDailyPerformanceReport(startDate, endDate) {
-    try {
-      const { data, error } = await supabase
-        .from('eps_daily_performance')
-        .select('*')
-        .gte('date', startDate.split('T')[0])
-        .lte('date', endDate.split('T')[0]);
-      
-      if (error) throw error;
-      
-      // Group by date and aggregate
-      const dateMap = new Map();
-      
-      data.forEach(record => {
-        const date = record.date;
-        if (!dateMap.has(date)) {
-          dateMap.set(date, {
-            date: date,
-            total_kilometers: 0,
-            speeding_incidents: 0,
-            route_violations: 0,
-            time_violations: 0,
-            total_points: 0
-          });
-        }
-        
-        const dayData = dateMap.get(date);
-        dayData.total_kilometers += record.latest_mileage || 0;
-        dayData.speeding_incidents += record.latest_speed > 80 ? 1 : 0;
-        dayData.route_violations += !record.route_compliance ? 1 : 0;
-        dayData.time_violations += !record.time_compliance ? 1 : 0;
-        dayData.total_points += record.total_risk_score || 0;
-      });
-      
-      // Convert to array and sort by date
-      return Array.from(dateMap.values()).sort((a, b) => new Date(a.date) - new Date(b.date));
-    } catch (error) {
-      console.error('Error getting daily performance report:', error);
-      throw error;
-    }
-  }
-  
   // Create daily snapshot of all driver data
   async createDailySnapshot() {
     try {
       const today = new Date().toISOString().split('T')[0];
+      
+      // Sync local states to database first
+      const syncPromises = Array.from(this.driverStates.entries()).map(([key, driverState]) => 
+        supabase
+          .from('eps_driver_rewards')
+          .upsert(driverState, { onConflict: 'driver_name' })
+      );
+      
+      await Promise.all(syncPromises);
+      
       // Get all current driver rewards
       const { data: drivers, error } = await supabase
         .from('eps_driver_rewards')
@@ -563,111 +346,12 @@ class EPSRewardSystem {
         .insert(snapshots);
       
       if (insertError) throw insertError;
+      console.log(`📸 Daily snapshot created for ${snapshots.length} drivers`);
     } catch (error) {
       console.error('Error creating daily snapshot:', error);
     }
-  }
-  
-  // Get monthly driver statistics
-  async getMonthlyDriverStats(driverName, year, month) {
-    try {
-      const startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
-      const endDate = new Date(year, month, 0).toISOString().split('T')[0];
-      
-      const { data, error } = await supabase
-        .from('eps_daily_snapshots')
-        .select('*')
-        .eq('driver_name', driverName)
-        .gte('snapshot_date', startDate)
-        .lte('snapshot_date', endDate)
-        .order('snapshot_date');
-      
-      if (error) throw error;
-      
-      if (data.length === 0) return null;
-      
-      const latest = data[data.length - 1];
-      const earliest = data[0];
-      
-      return {
-        driver_name: driverName,
-        month: `${year}-${month.toString().padStart(2, '0')}`,
-        current_points: latest.current_points,
-        current_level: latest.current_level,
-        monthly_violations: {
-          speed: latest.speed_violations - (earliest.speed_violations || 0),
-          harsh_braking: latest.harsh_braking_violations - (earliest.harsh_braking_violations || 0),
-          night_driving: latest.night_driving_violations - (earliest.night_driving_violations || 0),
-          route: latest.route_violations - (earliest.route_violations || 0),
-          other: latest.other_violations - (earliest.other_violations || 0)
-        },
-        points_deducted_this_month: latest.points_deducted - (earliest.points_deducted || 0),
-        risk_trend: this.calculateRiskTrend(data)
-      };
-    } catch (error) {
-      console.error('Error getting monthly driver stats:', error);
-      throw error;
-    }
-  }
-  
-  // Get fleet monthly risk score
-  async getFleetMonthlyRiskScore(year, month) {
-    try {
-      const endDate = new Date(year, month, 0).toISOString().split('T')[0];
-      
-      const { data, error } = await supabase
-        .from('eps_daily_snapshots')
-        .select('*')
-        .eq('snapshot_date', endDate);
-      
-      if (error) throw error;
-      
-      const totalDrivers = data.length;
-      const avgPoints = data.reduce((sum, d) => sum + d.current_points, 0) / totalDrivers;
-      const totalViolations = data.reduce((sum, d) => sum + d.total_violations, 0);
-      
-      const riskLevels = {
-        Gold: data.filter(d => d.current_points >= 80).length,
-        Silver: data.filter(d => d.current_points >= 60 && d.current_points < 80).length,
-        Bronze: data.filter(d => d.current_points >= 40 && d.current_points < 60).length,
-        Critical: data.filter(d => d.current_points < 40).length
-      };
-      
-      return {
-        month: `${year}-${month.toString().padStart(2, '0')}`,
-        total_drivers: totalDrivers,
-        average_points: Math.round(avgPoints * 100) / 100,
-        total_violations: totalViolations,
-        risk_distribution: riskLevels,
-        fleet_risk_score: this.calculateFleetRiskScore(avgPoints, totalViolations, totalDrivers)
-      };
-    } catch (error) {
-      console.error('Error getting fleet monthly risk score:', error);
-      throw error;
-    }
-  }
-  
-  // Calculate risk trend from daily snapshots
-  calculateRiskTrend(snapshots) {
-    if (snapshots.length < 2) return 'stable';
-    
-    const recent = snapshots.slice(-7); // Last 7 days
-    const pointsChange = recent[recent.length - 1].current_points - recent[0].current_points;
-    
-    if (pointsChange <= -5) return 'deteriorating';
-    if (pointsChange >= 5) return 'improving';
-    return 'stable';
-  }
-  
-  // Calculate fleet risk score
-  calculateFleetRiskScore(avgPoints, totalViolations, totalDrivers) {
-    const pointsScore = (avgPoints / 100) * 70; // 70% weight on points
-    const violationScore = Math.max(0, 30 - (totalViolations / totalDrivers) * 5); // 30% weight on violations
-    
-    return Math.round((pointsScore + violationScore) * 100) / 100;
   }
 }
 
 module.exports = EPSRewardSystem;
 module.exports.supabase = supabase;
-
