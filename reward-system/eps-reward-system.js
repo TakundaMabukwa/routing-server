@@ -1,5 +1,7 @@
 require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
+const Database = require('better-sqlite3');
+const path = require('path');
 
 // Supabase client
 const supabase = createClient(
@@ -25,14 +27,48 @@ class EPSRewardSystem {
     // Local driver state (in-memory only)
     this.driverStates = new Map();
     
-    // Only write to database when violations occur or daily
-    this.lastDatabaseWrite = new Map();
-    this.DATABASE_WRITE_COOLDOWN = 24 * 60 * 60 * 1000; // 24 hours
+    // SQLite local database
+    this.initLocalDB();
+    
+    // Hourly Supabase sync
+    this.lastSupabaseSync = 0;
+    this.SUPABASE_SYNC_INTERVAL = 60 * 60 * 1000; // 1 hour
     
     // Daily snapshot timer
     this.setupDailySnapshot()
+    this.setupHourlySync()
   }
   
+  // Initialize local SQLite database
+  initLocalDB() {
+    const dbPath = path.join(__dirname, '..', 'eps-rewards.db');
+    this.db = new Database(dbPath);
+    
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS driver_rewards (
+        driver_name TEXT PRIMARY KEY,
+        current_points INTEGER,
+        points_deducted INTEGER,
+        current_level TEXT,
+        speed_violations_count INTEGER,
+        harsh_braking_count INTEGER,
+        night_driving_count INTEGER,
+        route_violations_count INTEGER,
+        other_violations_count INTEGER,
+        last_updated TEXT,
+        synced_to_supabase INTEGER DEFAULT 0
+      )
+    `);
+    
+    console.log('📦 EPS Rewards local database initialized');
+  }
+
+  // Setup hourly Supabase sync
+  setupHourlySync() {
+    setInterval(() => this.syncToSupabase(), this.SUPABASE_SYNC_INTERVAL);
+    console.log('⏰ Hourly Supabase sync enabled');
+  }
+
   // Setup daily snapshot at midnight
   setupDailySnapshot() {
     const now = new Date();
@@ -111,9 +147,9 @@ class EPSRewardSystem {
       // Process violations in memory only
       const violations = this.processViolationsLocal(epsData);
       
-      // Only write to database if there are violations
+      // Only write to local database if there are violations
       if (violations.length > 0) {
-        await this.writeViolationsToDatabase(driverName, violations);
+        this.writeViolationsToLocalDB(driverName, violations);
       }
 
       return { violations, isDriving: true };
@@ -227,37 +263,78 @@ class EPSRewardSystem {
     return violations;
   }
 
-  // Write violations to database (only when violations occur)
-  async writeViolationsToDatabase(driverName, violations) {
+  // Write violations to local SQLite only
+  writeViolationsToLocalDB(driverName, violations) {
     try {
-      const now = Date.now();
-      const lastWrite = this.lastDatabaseWrite.get(driverName) || 0;
-      
-      // Always update driver rewards when violations occur
       const driverState = this.getLocalDriverState(driverName);
       
-      await supabase
+      // Store in local SQLite database
+      this.db.prepare(`
+        INSERT OR REPLACE INTO driver_rewards (
+          driver_name, current_points, points_deducted, current_level,
+          speed_violations_count, harsh_braking_count, night_driving_count,
+          route_violations_count, other_violations_count, last_updated, synced_to_supabase
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+      `).run(
+        driverName,
+        driverState.current_points,
+        driverState.points_deducted,
+        driverState.current_level,
+        driverState.speed_violations_count,
+        driverState.harsh_braking_count,
+        driverState.night_driving_count,
+        driverState.route_violations_count,
+        driverState.other_violations_count,
+        new Date().toISOString()
+      );
+      
+      console.log(`📝 ${driverName}: ${violations.length} violations - Points: ${driverState.current_points} (local)`);
+      
+    } catch (error) {
+      console.error('Error writing to local database:', error);
+    }
+  }
+
+  // Sync all unsynced data to Supabase (hourly)
+  async syncToSupabase() {
+    try {
+      const unsyncedDrivers = this.db.prepare('SELECT * FROM driver_rewards WHERE synced_to_supabase = 0').all();
+      
+      if (unsyncedDrivers.length === 0) {
+        console.log('✅ No unsynced driver data');
+        return;
+      }
+      
+      console.log(`☁️ Syncing ${unsyncedDrivers.length} drivers to Supabase...`);
+      
+      // Batch upsert to Supabase
+      const { error } = await supabase
         .from('eps_driver_rewards')
-        .upsert({
-          driver_name: driverName,
-          current_points: driverState.current_points,
-          points_deducted: driverState.points_deducted,
-          current_level: driverState.current_level,
-          speed_violations_count: driverState.speed_violations_count,
-          harsh_braking_count: driverState.harsh_braking_count,
-          night_driving_count: driverState.night_driving_count,
-          route_violations_count: driverState.route_violations_count,
-          other_violations_count: driverState.other_violations_count,
-          last_updated: new Date().toISOString()
-        }, {
+        .upsert(unsyncedDrivers.map(driver => ({
+          driver_name: driver.driver_name,
+          current_points: driver.current_points,
+          points_deducted: driver.points_deducted,
+          current_level: driver.current_level,
+          speed_violations_count: driver.speed_violations_count,
+          harsh_braking_count: driver.harsh_braking_count,
+          night_driving_count: driver.night_driving_count,
+          route_violations_count: driver.route_violations_count,
+          other_violations_count: driver.other_violations_count,
+          last_updated: driver.last_updated
+        })), {
           onConflict: 'driver_name'
         });
       
-      this.lastDatabaseWrite.set(driverName, now);
-      console.log(`🚨 ${driverName}: ${violations.length} violations - Points: ${driverState.current_points}`);
+      if (error) throw error;
+      
+      // Mark as synced
+      this.db.prepare('UPDATE driver_rewards SET synced_to_supabase = 1 WHERE synced_to_supabase = 0').run();
+      
+      console.log(`✅ Synced ${unsyncedDrivers.length} drivers to Supabase`);
+      this.lastSupabaseSync = Date.now();
       
     } catch (error) {
-      console.error('Error writing violations to database:', error);
+      console.error('Error syncing to Supabase:', error);
     }
   }
 
@@ -269,7 +346,14 @@ class EPSRewardSystem {
       return localState;
     }
     
-    // If not in local state, fetch from database
+    // Check local SQLite database
+    const localDriver = this.db.prepare('SELECT * FROM driver_rewards WHERE driver_name = ?').get(driverName);
+    if (localDriver) {
+      this.driverStates.set(driverName.toLowerCase(), localDriver);
+      return localDriver;
+    }
+    
+    // If not in local storage, fetch from Supabase
     try {
       const { data, error } = await supabase
         .from('eps_driver_rewards')
@@ -280,7 +364,7 @@ class EPSRewardSystem {
       if (error && error.code !== 'PGRST116') throw error;
       
       if (data) {
-        // Cache in local state
+        // Cache in local state and SQLite
         this.driverStates.set(driverName.toLowerCase(), data);
         return data;
       }
@@ -295,7 +379,7 @@ class EPSRewardSystem {
 
   // Process batch (for API compatibility)
   async processBatch() {
-    // In the new system, violations are written immediately
+    // In the new system, violations are written immediately to local DB
     // This method exists for compatibility but does nothing
     return Promise.resolve();
   }
@@ -305,21 +389,11 @@ class EPSRewardSystem {
     try {
       const today = new Date().toISOString().split('T')[0];
       
-      // Sync local states to database first
-      const syncPromises = Array.from(this.driverStates.entries()).map(([key, driverState]) => 
-        supabase
-          .from('eps_driver_rewards')
-          .upsert(driverState, { onConflict: 'driver_name' })
-      );
+      // Force sync to Supabase before snapshot
+      await this.syncToSupabase();
       
-      await Promise.all(syncPromises);
-      
-      // Get all current driver rewards
-      const { data: drivers, error } = await supabase
-        .from('eps_driver_rewards')
-        .select('*');
-      
-      if (error) throw error;
+      // Get all current driver rewards from local DB
+      const drivers = this.db.prepare('SELECT * FROM driver_rewards').all();
       
       // Create snapshot for each driver
       const snapshots = drivers.map(driver => ({
