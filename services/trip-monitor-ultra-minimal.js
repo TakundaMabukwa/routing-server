@@ -40,6 +40,7 @@ class TripMonitorUltraMinimal {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS trip_routes (
         trip_id INTEGER PRIMARY KEY,
+        company TEXT NOT NULL DEFAULT 'eps',
         route_points TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -259,8 +260,8 @@ class TripMonitorUltraMinimal {
         this.db.prepare('UPDATE trip_routes SET route_points = ?, updated_at = ? WHERE trip_id = ?')
           .run(JSON.stringify(points), new Date().toISOString(), tripId);
       } else {
-        this.db.prepare('INSERT INTO trip_routes (trip_id, route_points, created_at, updated_at) VALUES (?, ?, ?, ?)')
-          .run(tripId, JSON.stringify([newPoint]), new Date().toISOString(), new Date().toISOString());
+        this.db.prepare('INSERT INTO trip_routes (trip_id, company, route_points, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+          .run(tripId, this.company, JSON.stringify([newPoint]), new Date().toISOString(), new Date().toISOString());
       }
     } catch (error) {
       console.error('❌ Error updating trip location:', error.message);
