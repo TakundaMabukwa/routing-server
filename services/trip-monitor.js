@@ -20,15 +20,19 @@ class TripMonitor {
     this.matchedDrivers = new Map();
     this.matchedVehicles = new Map();
     this.noMatchLogged = new Set();
+    this.vehicleAlerts = new Map();
+    this.geocodeCache = new Map();
     this.STOP_DETECTION_TIME = 5 * 60 * 1000;
     this.STATIONARY_RADIUS = 50;
     this.BREAK_REQUIRED_INTERVAL = 2 * 60 * 60 * 1000;
     this.SYNC_INTERVAL = 30 * 60 * 1000;
+    this.ALERT_COOLDOWN = 5 * 60 * 1000;
     
     this.initLocalDB();
     this.loadActiveTrips();
     this.setupRealtimeSubscription();
     this.startPeriodicSync();
+    this.startCooldownCleanup();
   }
 
   initLocalDB() {
@@ -48,6 +52,17 @@ class TripMonitor {
 
   startPeriodicSync() {
     setInterval(() => this.syncRoutePoints(), this.SYNC_INTERVAL);
+  }
+
+  startCooldownCleanup() {
+    setInterval(() => {
+      const now = Date.now();
+      for (const [key, timestamp] of this.vehicleAlerts.entries()) {
+        if (now - timestamp > this.ALERT_COOLDOWN) {
+          this.vehicleAlerts.delete(key);
+        }
+      }
+    }, 60 * 1000);
   }
 
   setupRealtimeSubscription() {
@@ -110,7 +125,7 @@ class TripMonitor {
     }
   }
 
-  async processVehicleData(vehicleData) {
+  async processVehicleData(vehicleData, borderMonitor = null) {
     try {
       const { DriverName: driverName, Plate: plate, Latitude: lat, Longitude: lon, Speed: speed, Mileage: mileage } = vehicleData;
       
@@ -124,7 +139,16 @@ class TripMonitor {
       console.log(`🚛 TRACKING: ${driverName} (${plate}) - Trip ${activeTrip.id} at ${lat},${lon} (${speed}km/h)`);
       
       await this.updateTripLocation(activeTrip.id, lat, lon, speed, mileage);
-      await this.checkForStops(activeTrip, lat, lon, speed);
+      await this.checkCustomerProximity(activeTrip, lat, lon);
+      
+      let isAtBorder = false;
+      if (borderMonitor) {
+        isAtBorder = await borderMonitor.checkVehicleLocation(vehicleData, activeTrip.id);
+      }
+      
+      if (!isAtBorder) {
+        await this.checkForStops(activeTrip, lat, lon, speed);
+      }
       
     } catch (error) {
       console.error('❌ Error processing vehicle data for trip monitoring:', error.message);
@@ -382,6 +406,7 @@ class TripMonitor {
           await this.flagUnauthorizedStop(trip.id, latitude, longitude, authCheck.reason);
           console.log(`🚨 UNAUTHORIZED STOP: Trip ${trip.id} - ${authCheck.reason}`);
         } else {
+          await this.sendCustomerArrivalAlert(trip.id, authCheck.stopName, latitude, longitude);
           console.log(`✅ Authorized stop: Trip ${trip.id} at ${authCheck.stopName}`);
         }
         
@@ -453,6 +478,104 @@ class TripMonitor {
         
     } catch (error) {
       console.error('❌ Error flagging unauthorized stop:', error.message);
+    }
+  }
+
+  async sendCustomerArrivalAlert(tripId, stopName, latitude, longitude) {
+    try {
+      await this.supabase
+        .from('trips')
+        .update({
+          alert_type: 'customer_arrival',
+          alert_message: `Vehicle arrived at customer: ${stopName}`,
+          alert_timestamp: new Date().toISOString(),
+          status: 'at-customer',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', tripId);
+      
+      console.log(`📍 CUSTOMER ARRIVAL: Trip ${tripId} at ${stopName}`);
+    } catch (error) {
+      console.error('❌ Error sending customer arrival alert:', error.message);
+    }
+  }
+
+  async checkCustomerProximity(trip, lat, lon) {
+    try {
+      const alertKey = `proximity:${trip.id}`;
+      
+      if (this.vehicleAlerts.has(alertKey)) return;
+      
+      const { data: tripData } = await this.supabase
+        .from('trips')
+        .select('dropofflocations')
+        .eq('id', trip.id)
+        .single();
+      
+      if (!tripData?.dropofflocations || tripData.dropofflocations.length === 0) return;
+      
+      const dropoffs = Array.isArray(tripData.dropofflocations) 
+        ? tripData.dropofflocations 
+        : JSON.parse(tripData.dropofflocations);
+      
+      for (const dropoff of dropoffs) {
+        if (!dropoff.location) continue;
+        
+        const coords = await this.geocodeAddress(dropoff.location);
+        if (!coords) {
+          console.log(`⚠️ Failed to geocode: ${dropoff.location}`);
+          continue;
+        }
+        
+        const dist = this.calculateDistance(lat, lon, coords.lat, coords.lng);
+        const distKm = (dist / 1000).toFixed(2);
+        
+        if (dist <= 5000) {
+          await this.supabase
+            .from('trips')
+            .update({
+              alert_type: 'near_customer',
+              alert_message: `Vehicle is ${distKm}km from customer: ${dropoff.location}`,
+              alert_timestamp: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', trip.id);
+          
+          console.log(`📍 NEAR CUSTOMER: Trip ${trip.id} - ${distKm}km from ${dropoff.location}`);
+          this.vehicleAlerts.set(alertKey, Date.now());
+          break;
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error checking customer proximity:', error.message);
+    }
+  }
+
+  async geocodeAddress(address) {
+    try {
+      if (this.geocodeCache.has(address)) {
+        return this.geocodeCache.get(address);
+      }
+      
+      const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+      if (!mapboxToken) return null;
+      
+      const response = await fetch(
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json?access_token=${mapboxToken}&limit=1`
+      );
+      
+      const data = await response.json();
+      if (data.features && data.features.length > 0) {
+        const [lng, lat] = data.features[0].center;
+        const coords = { lat, lng };
+        this.geocodeCache.set(address, coords);
+        return coords;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('❌ Geocoding error:', error.message);
+      return null;
     }
   }
 }

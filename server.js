@@ -7,6 +7,9 @@ const mayseneRoutes = require('./reward-system/maysene-rewards');
 const statsRoutes = require('./reward-system/stats-routes');
 const { parseWithNames } = require('./fuel-parsing/canbus-parser-v2');
 const TripMonitor = require('./services/trip-monitor-ultra-minimal');
+const HighRiskMonitor = require('./services/high-risk-monitor');
+const TollGateMonitor = require('./services/toll-gate-monitor');
+const BorderMonitor = require('./services/border-monitor');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -92,6 +95,15 @@ const tripMonitors = {
   maysene: new TripMonitor('maysene')
 };
 
+// Initialize High Risk Monitor for EPS only
+const highRiskMonitor = new HighRiskMonitor('eps');
+
+// Initialize Toll Gate Monitor for EPS only
+const tollGateMonitor = new TollGateMonitor('eps');
+
+// Initialize Border Monitor for EPS only
+const borderMonitor = new BorderMonitor('eps');
+
 // WebSocket connections per company
 const websockets = {
   eps: new WebSocket(process.env.EPS_WEBSOCKET_URL),
@@ -174,9 +186,28 @@ function setupWebSocket(company, ws) {
     // Process through trip monitoring system
     if (vehicleData.DriverName && vehicleData.Latitude && vehicleData.Longitude) {
       try {
-        await tripMonitors[company].processVehicleData(vehicleData);
+        const monitor = company === 'eps' ? borderMonitor : null;
+        await tripMonitors[company].processVehicleData(vehicleData, monitor);
       } catch (error) {
         console.error('Error processing trip monitoring data:', error);
+      }
+    }
+    
+    // Check for high-risk zone entry (EPS only)
+    if (company === 'eps' && vehicleData.Latitude && vehicleData.Longitude) {
+      try {
+        await highRiskMonitor.checkVehicleLocation(vehicleData);
+      } catch (error) {
+        console.error('Error checking high-risk zones:', error);
+      }
+    }
+    
+    // Check for toll gate proximity (EPS only)
+    if (company === 'eps' && vehicleData.Latitude && vehicleData.Longitude) {
+      try {
+        await tollGateMonitor.checkVehicleLocation(vehicleData);
+      } catch (error) {
+        console.error('Error checking toll gates:', error);
       }
     }
     
@@ -216,6 +247,37 @@ app.get('/', (req, res) => {
 app.use('/api/eps-rewards', epsRoutes);
 app.use('/api/maysene-rewards', mayseneRoutes);
 app.use('/api/stats', statsRoutes);
+
+// Test endpoint for high-risk zone simulation
+app.post('/api/test/high-risk-zone', async (req, res) => {
+  try {
+    const { plate, driverName, latitude, longitude } = req.body;
+    
+    if (!plate || !latitude || !longitude) {
+      return res.status(400).json({ error: 'plate, latitude, and longitude are required' });
+    }
+    
+    const testVehicleData = {
+      Plate: plate,
+      DriverName: driverName || 'Test Driver',
+      Latitude: parseFloat(latitude),
+      Longitude: parseFloat(longitude),
+      Speed: 50,
+      LocTime: new Date().toISOString()
+    };
+    
+    await highRiskMonitor.checkVehicleLocation(testVehicleData);
+    
+    res.json({
+      success: true,
+      message: 'High-risk zone check completed',
+      vehicle: testVehicleData
+    });
+  } catch (error) {
+    console.error('Test error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Mount cached trips routes
 const tripsCachedRoutes = require('./routes/trips-cached');
