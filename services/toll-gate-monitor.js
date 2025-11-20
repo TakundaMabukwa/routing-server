@@ -106,8 +106,9 @@ class TollGateMonitor {
     if (!coordString) return null;
     try {
       const coords = coordString.split(' ').map(coord => {
-        const [lon, lat] = coord.split(',').map(parseFloat);
-        return { lat, lon };
+        const parts = coord.split(',').map(parseFloat);
+        // Format is: lon,lat,elevation
+        return { lat: parts[1], lon: parts[0] };
       });
       return coords.length > 0 ? coords : null;
     } catch {
