@@ -119,6 +119,9 @@ function setupWebSocket(company, ws) {
   try {
     const vehicleData = JSON.parse(data.toString());
     
+    // Log raw WebSocket data
+    console.log(`\n[${company.toUpperCase()}] RAW DATA:`, JSON.stringify(vehicleData, null, 2));
+    
     // Cache latest vehicle data with company prefix
     vehicleDataCache.set(`${company}:${vehicleData.Plate}`, vehicleData);
     
@@ -284,7 +287,7 @@ const tripsCachedRoutes = require('./routes/trips-cached');
 app.use('/api/trips', tripsCachedRoutes);
 
 // Get trip route points by trip ID (with company parameter)
-app.get('/api/trips/:tripId/route', (req, res) => {
+app.get('/api/trips/:tripId/route', async (req, res) => {
   const tripId = parseInt(req.params.tripId);
   const company = req.query.company || 'eps';
   
@@ -293,11 +296,31 @@ app.get('/api/trips/:tripId/route', (req, res) => {
   }
   
   const routeData = tripMonitors[company].getRoutePoints(tripId);
-  if (routeData) {
-    res.json(routeData);
-  } else {
-    res.status(404).json({ error: 'Trip route not found' });
+  if (!routeData) {
+    return res.status(404).json({ error: 'Trip route not found' });
   }
+  
+  // Get trip info from Supabase
+  try {
+    const { data: trip } = await tripMonitors[company].supabase
+      .from('trips')
+      .select('id, vehicleassignments, status')
+      .eq('id', tripId)
+      .single();
+    
+    if (trip) {
+      const driverName = tripMonitors[company].getDriverNameFromAssignments(trip);
+      const plate = tripMonitors[company].getVehiclePlateFromAssignments(trip);
+      
+      routeData.vehicle = plate;
+      routeData.driver = driverName;
+      routeData.status = trip.status;
+    }
+  } catch (error) {
+    console.error('Error fetching trip info:', error);
+  }
+  
+  res.json(routeData);
 });
 
 // Get unauthorized stops for a trip (from local DB)

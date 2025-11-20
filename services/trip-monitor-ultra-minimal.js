@@ -377,7 +377,6 @@ class TripMonitorUltraMinimal {
             alert_type: 'unauthorized_stop',
             alert_message: `Unauthorized stop: ${reason}`,
             alert_timestamp: new Date().toISOString(),
-            status: 'alert',
             updated_at: new Date().toISOString()
           })
           .eq('id', tripId);
