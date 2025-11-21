@@ -46,6 +46,9 @@ class TripMonitorMinimal {
         vehicleassignments TEXT,
         selectedstoppoints TEXT,
         status TEXT,
+        alert_type TEXT,
+        loading_location_lat REAL,
+        loading_location_lng REAL,
         loaded_at TEXT
       );
       
@@ -76,16 +79,16 @@ class TripMonitorMinimal {
     try {
       const { data: trips } = await this.supabase
         .from('trips')
-        .select('id, vehicleassignments, status, selectedstoppoints')
+        .select('id, vehicleassignments, status, selectedstoppoints, alert_type, loading_location_lat, loading_location_lng')
         .not('status', 'in', '(Completed,Delivered)');
       
       if (!trips) return;
       
-      const stmt = this.db.prepare('INSERT OR REPLACE INTO trips_cache (id, vehicleassignments, selectedstoppoints, status, loaded_at) VALUES (?, ?, ?, ?, ?)');
+      const stmt = this.db.prepare('INSERT OR REPLACE INTO trips_cache (id, vehicleassignments, selectedstoppoints, status, alert_type, loading_location_lat, loading_location_lng, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
       const now = new Date().toISOString();
       
       for (const trip of trips) {
-        stmt.run(trip.id, JSON.stringify(trip.vehicleassignments), JSON.stringify(trip.selectedstoppoints), trip.status, now);
+        stmt.run(trip.id, JSON.stringify(trip.vehicleassignments), JSON.stringify(trip.selectedstoppoints), trip.status, trip.alert_type, trip.loading_location_lat, trip.loading_location_lng, now);
         this.activeTrips.set(trip.id, trip);
         
         if (trip.selectedstoppoints?.length > 0) {
@@ -270,6 +273,22 @@ class TripMonitorMinimal {
 
   async checkForStops(trip, latitude, longitude, speed) {
     try {
+      // Skip if already flagged as at destination
+      if (trip.alert_type === 'at_destination') {
+        return;
+      }
+      
+      // Skip if within 700m of loading location
+      if (trip.loading_location_lat && trip.loading_location_lng) {
+        const distToLoading = this.calculateDistance(
+          latitude, longitude,
+          trip.loading_location_lat, trip.loading_location_lng
+        );
+        if (distToLoading <= 700) {
+          return;
+        }
+      }
+      
       const driverKey = `${trip.id}`;
       const now = Date.now();
       
