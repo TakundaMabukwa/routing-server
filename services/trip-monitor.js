@@ -503,6 +503,7 @@ class TripMonitor {
   async checkCustomerProximity(trip, lat, lon) {
     try {
       const alertKey = `proximity:${trip.id}`;
+      const destinationKey = `destination:${trip.id}`;
       
       if (this.vehicleAlerts.has(alertKey)) return;
       
@@ -530,7 +531,25 @@ class TripMonitor {
         const dist = this.calculateDistance(lat, lon, coords.lat, coords.lng);
         const distKm = (dist / 1000).toFixed(2);
         
-        if (dist <= 5000) {
+        // Check if within 700m (destination reached)
+        if (dist <= 700 && !this.vehicleAlerts.has(destinationKey)) {
+          await this.supabase
+            .from('trips')
+            .update({
+              alert_type: 'at_destination',
+              alert_message: `🎯 Driver has arrived at destination: ${dropoff.location} (${Math.round(dist)}m away)`,
+              alert_timestamp: new Date().toISOString(),
+              status: 'at-destination',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', trip.id);
+          
+          console.log(`🎯 AT DESTINATION: Trip ${trip.id} - ${Math.round(dist)}m from ${dropoff.location}`);
+          this.vehicleAlerts.set(destinationKey, Date.now());
+          break;
+        }
+        // Check if within 5km (approaching)
+        else if (dist <= 5000) {
           await this.supabase
             .from('trips')
             .update({

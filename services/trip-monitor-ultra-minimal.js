@@ -20,6 +20,8 @@ class TripMonitorUltraMinimal {
     this.matchedDrivers = new Map();
     this.matchedVehicles = new Map();
     this.stopPointsCache = new Map();
+    this.geocodeCache = new Map();
+    this.destinationAlerts = new Map();
     
     // Debounce tracking for Supabase writes
     this.lastSupabaseWrite = new Map();
@@ -145,7 +147,10 @@ class TripMonitorUltraMinimal {
       if (!activeTrip) return;
 
       this.updateTripLocationLocal(activeTrip.id, lat, lon, speed);
-      await this.checkForStops(activeTrip, lat, lon, speed);
+      await this.checkDestinationProximity(activeTrip, lat, lon);
+      await this.checkHighRiskZone(activeTrip, vehicleData);
+      await this.checkTollGate(activeTrip, vehicleData);
+      await this.checkForStops(activeTrip, lat, lon, speed, vehicleData);
       
     } catch (error) {
       console.error('❌ Error processing vehicle data:', error.message);
@@ -285,7 +290,7 @@ class TripMonitorUltraMinimal {
     return distance(from, to, { units: 'meters' });
   }
 
-  async checkForStops(trip, latitude, longitude, speed) {
+  async checkForStops(trip, latitude, longitude, speed, vehicleData) {
     try {
       const driverKey = `${trip.id}`;
       const now = Date.now();
@@ -314,7 +319,7 @@ class TripMonitorUltraMinimal {
         const authCheck = await this.isAuthorizedStopLocal(trip.id, latitude, longitude, trip.selectedstoppoints);
         
         if (!authCheck.authorized) {
-          await this.flagUnauthorizedStopDebounced(trip.id, latitude, longitude, authCheck.reason);
+          await this.flagUnauthorizedStopDebounced(trip.id, latitude, longitude, authCheck.reason, vehicleData);
         }
         
         this.stationaryDrivers.delete(driverKey);
@@ -358,10 +363,15 @@ class TripMonitorUltraMinimal {
     }
   }
 
-  async flagUnauthorizedStopDebounced(tripId, latitude, longitude, reason) {
+  async flagUnauthorizedStopDebounced(tripId, latitude, longitude, reason, vehicleData) {
     try {
       const now = Date.now();
       const lastWrite = this.lastSupabaseWrite.get(tripId) || 0;
+      
+      // Get trip info for vehicle plate
+      const trip = this.activeTrips.get(tripId);
+      const plate = trip ? this.getVehiclePlateFromAssignments(trip) : null;
+      const geozone = vehicleData?.Geozone || '';
       
       // Store in local SQLite always
       this.db.prepare('INSERT INTO unauthorized_stops (trip_id, latitude, longitude, reason, detected_at, synced_to_supabase) VALUES (?, ?, ?, ?, ?, ?)')
@@ -371,11 +381,13 @@ class TripMonitorUltraMinimal {
       
       // Only write to Supabase if cooldown period has passed
       if (now - lastWrite >= this.SUPABASE_WRITE_COOLDOWN) {
+        const vehicleInfo = plate ? `Vehicle ${plate} - ` : '';
+        const geozoneInfo = geozone ? ` | Geozone: ${geozone}` : '';
         await this.supabase
           .from('trips')
           .update({
             alert_type: 'unauthorized_stop',
-            alert_message: `Unauthorized stop: ${reason}`,
+            alert_message: `${vehicleInfo}Unauthorized stop: ${reason}${geozoneInfo}`,
             alert_timestamp: new Date().toISOString(),
             updated_at: new Date().toISOString()
           })
@@ -394,6 +406,158 @@ class TripMonitorUltraMinimal {
       
     } catch (error) {
       console.error('❌ Error flagging unauthorized stop:', error.message);
+    }
+  }
+
+  async checkDestinationProximity(trip, lat, lon) {
+    try {
+      const destinationKey = `destination:${trip.id}`;
+      if (this.destinationAlerts.has(destinationKey)) return;
+      
+      const { data: tripData } = await this.supabase
+        .from('trips')
+        .select('dropofflocations')
+        .eq('id', trip.id)
+        .single();
+      
+      if (!tripData?.dropofflocations || tripData.dropofflocations.length === 0) return;
+      
+      const dropoffs = Array.isArray(tripData.dropofflocations) 
+        ? tripData.dropofflocations 
+        : JSON.parse(tripData.dropofflocations);
+      
+      for (const dropoff of dropoffs) {
+        const address = dropoff.location || dropoff.address;
+        if (!address) continue;
+        
+        const coords = await this.geocodeAddress(address);
+        if (!coords) continue;
+        
+        const dist = this.calculateDistance(lat, lon, coords.lat, coords.lng);
+        
+        if (dist <= 700) {
+          await this.supabase
+            .from('trips')
+            .update({
+              alert_type: 'at_destination',
+              alert_message: `🎯 Driver arrived at destination: ${address} (${Math.round(dist)}m away)`,
+              alert_timestamp: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', trip.id);
+          
+          console.log(`🎯 AT DESTINATION: Trip ${trip.id} - ${Math.round(dist)}m from ${address}`);
+          this.destinationAlerts.set(destinationKey, Date.now());
+          break;
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error checking destination proximity:', error.message);
+    }
+  }
+  
+  async geocodeAddress(address) {
+    try {
+      const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+      if (!mapboxToken) return null;
+      
+      const response = await fetch(
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json?access_token=${mapboxToken}&limit=1`
+      );
+      
+      const data = await response.json();
+      if (data.features && data.features.length > 0) {
+        const [lng, lat] = data.features[0].center;
+        return { lat, lng };
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('❌ Geocoding error:', error.message);
+      return null;
+    }
+  }
+
+  async checkHighRiskZone(trip, vehicleData) {
+    try {
+      const { Plate: plate, Latitude: lat, Longitude: lng, Geozone: geozone } = vehicleData;
+      if (!lat || !lng) return;
+      
+      const HighRiskMonitor = require('./high-risk-monitor');
+      if (!this.highRiskMonitor) {
+        this.highRiskMonitor = new HighRiskMonitor(this.company);
+      }
+      
+      for (const zone of this.highRiskMonitor.highRiskZones) {
+        const isInZone = this.highRiskMonitor.isVehicleInZone(lat, lng, zone);
+        
+        if (isInZone) {
+          const alertKey = `highrisk:${trip.id}:${zone.id}`;
+          if (this.destinationAlerts.has(alertKey)) continue;
+          
+          const geozoneInfo = geozone ? ` | Geozone: ${geozone}` : '';
+          await this.supabase
+            .from('trips')
+            .update({
+              alert_type: 'high_risk_zone',
+              alert_message: `Vehicle ${plate} entered high-risk zone: ${zone.name}${geozoneInfo}`,
+              alert_timestamp: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', trip.id);
+          
+          console.log(`⚠️ HIGH RISK: Trip ${trip.id} - ${plate} entered ${zone.name}`);
+          this.destinationAlerts.set(alertKey, Date.now());
+          break;
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error checking high-risk zone:', error.message);
+    }
+  }
+
+  async checkTollGate(trip, vehicleData) {
+    try {
+      const { Plate: plate, Latitude: lat, Longitude: lon, Geozone: geozone } = vehicleData;
+      if (!lat || !lon) return;
+      
+      const TollGateMonitor = require('./toll-gate-monitor');
+      if (!this.tollGateMonitor) {
+        this.tollGateMonitor = new TollGateMonitor(this.company);
+      }
+      
+      const tollGates = this.tollGateMonitor.db.prepare('SELECT * FROM toll_gates').all();
+      
+      for (const gate of tollGates) {
+        const polygonCoords = this.tollGateMonitor.parsePolygonCoordinates(gate.coordinates);
+        if (!polygonCoords) continue;
+        
+        const centroid = this.tollGateMonitor.getCentroid(polygonCoords);
+        const dist = this.tollGateMonitor.calculateDistance(lat, lon, centroid.lat, centroid.lon);
+        const radius = gate.radius || 100;
+        
+        if (dist <= radius) {
+          const alertKey = `tollgate:${trip.id}:${gate.id}`;
+          if (this.destinationAlerts.has(alertKey)) continue;
+          
+          const geozoneInfo = geozone ? ` | Geozone: ${geozone}` : '';
+          await this.supabase
+            .from('trips')
+            .update({
+              alert_type: 'toll_gate',
+              alert_message: `Vehicle ${plate} at toll gate: ${gate.name}${geozoneInfo}`,
+              alert_timestamp: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', trip.id);
+          
+          console.log(`🚧 TOLL GATE: Trip ${trip.id} - ${plate} at ${gate.name}`);
+          this.destinationAlerts.set(alertKey, Date.now());
+          break;
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error checking toll gate:', error.message);
     }
   }
 
