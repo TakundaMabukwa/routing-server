@@ -16,8 +16,7 @@ class HighRiskMonitor {
     
     this.supabase = createClient(supabaseUrl, supabaseKey);
     this.highRiskZones = [];
-    this.vehicleAlerts = new Map();
-    this.ALERT_COOLDOWN = 30 * 60 * 1000;
+    this.ALERT_COOLDOWN = 3 * 60 * 60 * 1000; // 3 hours
     
     this.initLocalDB();
     this.loadHighRiskZones();
@@ -36,7 +35,20 @@ class HighRiskMonitor {
         radius REAL,
         type TEXT,
         updated_at TEXT
-      )
+      );
+      
+      CREATE TABLE IF NOT EXISTS high_risk_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        plate TEXT NOT NULL,
+        zone_id INTEGER NOT NULL,
+        zone_name TEXT,
+        latitude REAL,
+        longitude REAL,
+        timestamp TEXT NOT NULL,
+        synced_to_supabase INTEGER DEFAULT 1
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_alerts_plate_zone ON high_risk_alerts(plate, zone_id, timestamp);
     `);
     console.log('📦 High-risk zones database initialized');
   }
@@ -96,8 +108,19 @@ class HighRiskMonitor {
   }
 
   startPeriodicRefresh() {
-    // Sync from Supabase every 24 hours (once per day)
+    // Sync zones from Supabase every 24 hours
     setInterval(() => this.syncFromSupabase(), 24 * 60 * 60 * 1000);
+    
+    // Clean up old alerts (older than 7 days) every 24 hours
+    setInterval(() => this.cleanupOldAlerts(), 24 * 60 * 60 * 1000);
+  }
+  
+  cleanupOldAlerts() {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const result = this.db.prepare('DELETE FROM high_risk_alerts WHERE timestamp < ?').run(sevenDaysAgo);
+    if (result.changes > 0) {
+      console.log(`🧹 Cleaned up ${result.changes} old high-risk alerts`);
+    }
   }
 
   parseCoordinates(coordinatesStr) {
@@ -144,23 +167,14 @@ class HighRiskMonitor {
         const isInZone = this.isVehicleInZone(lat, lng, zone);
         
         if (isInZone) {
-          const alertKey = `${plate}:${zone.id}`;
-          const lastAlert = this.vehicleAlerts.get(alertKey);
+          // Check if alert was sent in last 3 hours (from SQLite)
+          const shouldSendAlert = this.shouldSendAlert(plate, zone.id);
           
-          // Check cooldown
-          if (lastAlert && (Date.now() - lastAlert) < this.ALERT_COOLDOWN) {
-            continue; // Skip if alert was sent recently
+          if (shouldSendAlert) {
+            // Send alert to Supabase and store in SQLite
+            await this.sendHighRiskAlert(plate, driverName, lat, lng, zone);
+            console.log(`🚨 HIGH RISK ALERT: ${plate} (${driverName}) entered ${zone.name}`);
           }
-          
-          // Send alert
-          await this.sendHighRiskAlert(plate, driverName, lat, lng, zone);
-          this.vehicleAlerts.set(alertKey, Date.now());
-          
-          console.log(`🚨 HIGH RISK ALERT: ${plate} (${driverName}) entered ${zone.name}`);
-        } else {
-          // Vehicle left zone, clear alert
-          const alertKey = `${plate}:${zone.id}`;
-          this.vehicleAlerts.delete(alertKey);
         }
       }
     } catch (error) {
@@ -190,8 +204,29 @@ class HighRiskMonitor {
     return false;
   }
 
+  shouldSendAlert(plate, zoneId) {
+    const threeHoursAgo = new Date(Date.now() - this.ALERT_COOLDOWN).toISOString();
+    
+    const recentAlert = this.db.prepare(`
+      SELECT id FROM high_risk_alerts 
+      WHERE plate = ? AND zone_id = ? AND timestamp > ?
+      LIMIT 1
+    `).get(plate, zoneId, threeHoursAgo);
+    
+    return !recentAlert; // Send alert if no recent alert found
+  }
+
   async sendHighRiskAlert(plate, driverName, lat, lng, zone) {
     try {
+      const timestamp = new Date().toISOString();
+      
+      // Store in SQLite first
+      this.db.prepare(`
+        INSERT INTO high_risk_alerts (plate, zone_id, zone_name, latitude, longitude, timestamp, synced_to_supabase)
+        VALUES (?, ?, ?, ?, ?, ?, 1)
+      `).run(plate, zone.id, zone.name, lat, lng, timestamp);
+      
+      // Send to Supabase
       const alert = {
         company: this.company,
         plate: plate,
@@ -203,7 +238,7 @@ class HighRiskMonitor {
         alert_type: 'high_risk_zone_entry',
         alert_message: `Vehicle ${plate} entered high-risk zone: ${zone.name}`,
         severity: 'high',
-        timestamp: new Date().toISOString()
+        timestamp: timestamp
       };
 
       const { error } = await this.supabase
@@ -212,7 +247,7 @@ class HighRiskMonitor {
       
       if (error) throw error;
       
-      console.log(`✅ Alert sent: ${plate} in ${zone.name}`);
+      console.log(`✅ Alert sent to Supabase and stored in SQLite: ${plate} in ${zone.name}`);
     } catch (error) {
       console.error('Error sending high-risk alert:', error.message);
     }

@@ -11,8 +11,7 @@ class BorderMonitor {
     const supabaseKey = process.env.NEXT_PUBLIC_EPS_SUPABASE_ANON_KEY;
     
     this.supabase = createClient(supabaseUrl, supabaseKey);
-    this.vehicleAlerts = new Map();
-    this.ALERT_COOLDOWN = 60 * 60 * 1000; // 1 hour
+    this.ALERT_COOLDOWN = 3 * 60 * 60 * 1000; // 3 hours
     
     this.initLocalDB();
     this.loadFromLocalDB();
@@ -31,7 +30,16 @@ class BorderMonitor {
         radius REAL DEFAULT 100,
         created_at TEXT,
         updated_at TEXT
-      )
+      );
+      
+      CREATE TABLE IF NOT EXISTS border_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trip_id INTEGER NOT NULL,
+        border_name TEXT NOT NULL,
+        timestamp TEXT NOT NULL
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_border_alerts ON border_alerts(trip_id, border_name, timestamp);
     `);
   }
 
@@ -81,13 +89,9 @@ class BorderMonitor {
 
   startCooldownCleanup() {
     setInterval(() => {
-      const now = Date.now();
-      for (const [key, timestamp] of this.vehicleAlerts.entries()) {
-        if (now - timestamp > this.ALERT_COOLDOWN) {
-          this.vehicleAlerts.delete(key);
-        }
-      }
-    }, 60 * 1000);
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      this.db.prepare('DELETE FROM border_alerts WHERE timestamp < ?').run(sevenDaysAgo);
+    }, 24 * 60 * 60 * 1000);
   }
 
   calculateDistance(lat1, lon1, lat2, lon2) {
@@ -125,9 +129,6 @@ class BorderMonitor {
       
       if (!tripId || !lat || !lon || (lat === 0 && lon === 0)) return false;
 
-      const alertKey = `border:${tripId}`;
-      if (this.vehicleAlerts.has(alertKey)) return true;
-
       const borders = this.db.prepare('SELECT * FROM border_warnings').all();
       
       for (const border of borders) {
@@ -140,9 +141,10 @@ class BorderMonitor {
         const radius = 1000; // 1km radius
 
         if (dist <= radius) {
-          await this.flagTripAtBorder(tripId, plate, driverName, border.name, dist);
-          this.vehicleAlerts.set(alertKey, Date.now());
-          console.log(`🚨 BORDER: Trip ${tripId} (${plate}) at ${border.name} - ${(dist / 1000).toFixed(2)}km away`);
+          if (this.shouldSendAlert(tripId, border.name)) {
+            await this.flagTripAtBorder(tripId, plate, driverName, border.name, dist);
+            console.log(`🚨 BORDER: Trip ${tripId} (${plate}) at ${border.name} - ${(dist / 1000).toFixed(2)}km away`);
+          }
           return true;
         }
       }
@@ -153,16 +155,26 @@ class BorderMonitor {
     }
   }
 
+  shouldSendAlert(tripId, borderName) {
+    const threeHoursAgo = new Date(Date.now() - this.ALERT_COOLDOWN).toISOString();
+    const recent = this.db.prepare('SELECT id FROM border_alerts WHERE trip_id = ? AND border_name = ? AND timestamp > ? LIMIT 1').get(tripId, borderName, threeHoursAgo);
+    return !recent;
+  }
+
   async flagTripAtBorder(tripId, plate, driverName, borderName, distance) {
     try {
+      const timestamp = new Date().toISOString();
+      
+      this.db.prepare('INSERT INTO border_alerts (trip_id, border_name, timestamp) VALUES (?, ?, ?)').run(tripId, borderName, timestamp);
+      
       await this.supabase
         .from('trips')
         .update({
           alert_type: 'at_border',
           alert_message: `Vehicle at border stop: ${borderName}`,
-          alert_timestamp: new Date().toISOString(),
+          alert_timestamp: timestamp,
           status: 'at-border',
-          updated_at: new Date().toISOString()
+          updated_at: timestamp
         })
         .eq('id', tripId);
     } catch (error) {

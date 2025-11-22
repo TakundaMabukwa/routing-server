@@ -15,8 +15,7 @@ class TollGateMonitor {
       : process.env.NEXT_PUBLIC_EPS_SUPABASE_ANON_KEY;
     
     this.supabase = createClient(supabaseUrl, supabaseKey);
-    this.vehicleAlerts = new Map();
-    this.ALERT_COOLDOWN = 30 * 60 * 1000;
+    this.ALERT_COOLDOWN = 3 * 60 * 60 * 1000; // 3 hours
     
     this.initLocalDB();
     this.loadFromLocalDB();
@@ -36,7 +35,16 @@ class TollGateMonitor {
         type TEXT,
         created_at TEXT,
         updated_at TEXT
-      )
+      );
+      
+      CREATE TABLE IF NOT EXISTS toll_gate_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        plate TEXT NOT NULL,
+        toll_gate_name TEXT NOT NULL,
+        timestamp TEXT NOT NULL
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_toll_alerts ON toll_gate_alerts(plate, toll_gate_name, timestamp);
     `);
   }
 
@@ -87,13 +95,9 @@ class TollGateMonitor {
 
   startCooldownCleanup() {
     setInterval(() => {
-      const now = Date.now();
-      for (const [key, timestamp] of this.vehicleAlerts.entries()) {
-        if (now - timestamp > this.ALERT_COOLDOWN) {
-          this.vehicleAlerts.delete(key);
-        }
-      }
-    }, 60 * 1000);
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      this.db.prepare('DELETE FROM toll_gate_alerts WHERE timestamp < ?').run(sevenDaysAgo);
+    }, 24 * 60 * 60 * 1000);
   }
 
   calculateDistance(lat1, lon1, lat2, lon2) {
@@ -132,9 +136,6 @@ class TollGateMonitor {
       if (!lat || !lon || (lat === 0 && lon === 0)) return;
       if (!hasActiveTrip) return;
 
-      const alertKey = `tollgate:${plate}`;
-      if (this.vehicleAlerts.has(alertKey)) return;
-
       const tollGates = this.db.prepare('SELECT * FROM toll_gates').all();
       
       for (const gate of tollGates) {
@@ -147,9 +148,10 @@ class TollGateMonitor {
         const radius = gate.radius || 100;
 
         if (dist <= radius) {
-          await this.sendTollGateAlert(plate, driverName, gate.name, dist);
-          this.vehicleAlerts.set(alertKey, Date.now());
-          console.log(`🚧 TOLL GATE: ${plate} (${driverName}) at ${gate.name} - ${(dist).toFixed(0)}m away`);
+          if (this.shouldSendAlert(plate, gate.name)) {
+            await this.sendTollGateAlert(plate, driverName, gate.name, dist);
+            console.log(`🚧 TOLL GATE: ${plate} (${driverName}) at ${gate.name} - ${(dist).toFixed(0)}m away`);
+          }
           break;
         }
       }
@@ -158,8 +160,18 @@ class TollGateMonitor {
     }
   }
 
+  shouldSendAlert(plate, gateName) {
+    const threeHoursAgo = new Date(Date.now() - this.ALERT_COOLDOWN).toISOString();
+    const recent = this.db.prepare('SELECT id FROM toll_gate_alerts WHERE plate = ? AND toll_gate_name = ? AND timestamp > ? LIMIT 1').get(plate, gateName, threeHoursAgo);
+    return !recent;
+  }
+
   async sendTollGateAlert(plate, driverName, gateName, distance) {
     try {
+      const timestamp = new Date().toISOString();
+      
+      this.db.prepare('INSERT INTO toll_gate_alerts (plate, toll_gate_name, timestamp) VALUES (?, ?, ?)').run(plate, gateName, timestamp);
+      
       await this.supabase
         .from('toll_gate_alerts')
         .insert({
@@ -167,7 +179,7 @@ class TollGateMonitor {
           driver_name: driverName,
           toll_gate_name: gateName,
           distance_meters: Math.round(distance),
-          alert_timestamp: new Date().toISOString(),
+          alert_timestamp: timestamp,
           company: this.company
         });
     } catch (error) {
