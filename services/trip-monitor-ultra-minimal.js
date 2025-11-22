@@ -94,7 +94,7 @@ class TripMonitorUltraMinimal {
     try {
       const { data: trips } = await this.supabase
         .from('trips')
-        .select('id, vehicleassignments, status, selectedstoppoints')
+        .select('id, vehicleassignments, status, selectedstoppoints, destination_coordinates')
         .not('status', 'in', '(Completed,Delivered)');
       
       if (!trips) return;
@@ -331,6 +331,18 @@ class TripMonitorUltraMinimal {
 
   async isAuthorizedStopLocal(tripId, latitude, longitude, selectedStopPoints) {
     try {
+      const trip = this.activeTrips.get(tripId);
+      if (trip && trip.destination_coordinates) {
+        const destCoords = trip.destination_coordinates.split(',');
+        const destLat = parseFloat(destCoords[0]);
+        const destLon = parseFloat(destCoords[1]);
+        const distToDest = this.calculateDistance(latitude, longitude, destLat, destLon);
+        
+        if (distToDest <= 700) {
+          return { authorized: true, stopName: 'At destination' };
+        }
+      }
+      
       if (!selectedStopPoints || selectedStopPoints.length === 0) {
         return { authorized: false, reason: 'No authorized stop points defined' };
       }

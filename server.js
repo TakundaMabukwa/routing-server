@@ -10,6 +10,7 @@ const TripMonitor = require('./services/trip-monitor-ultra-minimal');
 const HighRiskMonitor = require('./services/high-risk-monitor');
 const TollGateMonitor = require('./services/toll-gate-monitor');
 const BorderMonitor = require('./services/border-monitor');
+const CTrackPoller = require('./services/ctrack-poller');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -104,6 +105,25 @@ const tollGateMonitor = new TollGateMonitor('eps');
 // Initialize Border Monitor for EPS only
 const borderMonitor = new BorderMonitor('eps');
 
+// Initialize C-Track Poller for EPS
+let ctrackPoller = null;
+if (process.env.CTRACK_USERNAME && process.env.CTRACK_PASSWORD) {
+  ctrackPoller = new CTrackPoller(
+    tripMonitors.eps,
+    highRiskMonitor,
+    tollGateMonitor,
+    borderMonitor,
+    vehicleDataCache,
+    sseClients,
+    null,
+    rewardSystem
+  );
+  ctrackPoller.start();
+  console.log('✅ C-Track integration enabled');
+} else {
+  console.log('⚠️ C-Track credentials not found, skipping C-Track integration');
+}
+
 // WebSocket connections per company
 const websockets = {
   eps: new WebSocket(process.env.EPS_WEBSOCKET_URL),
@@ -120,7 +140,7 @@ function setupWebSocket(company, ws) {
     const vehicleData = JSON.parse(data.toString());
     
     // Log raw WebSocket data
-    console.log(`\n[${company.toUpperCase()}] RAW DATA:`, JSON.stringify(vehicleData, null, 2));
+    // console.log(`\n[${company.toUpperCase()}] RAW DATA:`, JSON.stringify(vehicleData, null, 2));
     
     // Cache latest vehicle data with company prefix
     vehicleDataCache.set(`${company}:${vehicleData.Plate}`, vehicleData);
@@ -139,12 +159,6 @@ function setupWebSocket(company, ws) {
       if (canBusData && canBusData.trim() !== '') {
         const parsed = parseWithNames(canBusData);
         if (parsed.length > 0) {
-          console.log(`\n========== ${vehicleData.Plate} ==========`);
-          parsed.forEach(item => {
-            console.log(`${item.code.padEnd(6)} | ${item.name.padEnd(40)} | ${item.value}`);
-          });
-          console.log(`========================================\n`);
-          
           // Stream to SSE clients
           const streamData = {
             plate: vehicleData.Plate,
@@ -285,6 +299,13 @@ app.post('/api/test/high-risk-zone', async (req, res) => {
 // Mount cached trips routes
 const tripsCachedRoutes = require('./routes/trips-cached');
 app.use('/api/trips', tripsCachedRoutes);
+
+// Mount C-Track routes
+const ctrackRoutes = require('./routes/ctrack-routes');
+if (ctrackPoller) {
+  ctrackRoutes.setCTrackPoller(ctrackPoller);
+}
+app.use('/api/ctrack', ctrackRoutes);
 
 // Get trip route points by trip ID (with company parameter)
 app.get('/api/trips/:tripId/route', async (req, res) => {
@@ -436,6 +457,10 @@ wss.on('connection', (ws, req) => {
   
   wsClients.add(ws);
   console.log(`WebSocket client connected (${wsClients.size} total)`);
+  
+  if (ctrackPoller && !ctrackPoller.wsClients) {
+    ctrackPoller.wsClients = wsClients;
+  }
   
   // Send current snapshot on connect (combined from both companies)
   const epsSnapshot = Array.from(canBusCaches.eps.values());
