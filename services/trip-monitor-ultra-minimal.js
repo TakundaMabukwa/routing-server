@@ -332,6 +332,36 @@ class TripMonitorUltraMinimal {
   async isAuthorizedStopLocal(tripId, latitude, longitude, selectedStopPoints) {
     try {
       const trip = this.activeTrips.get(tripId);
+      
+      // Check loading location
+      if (trip) {
+        const { data: tripData } = await this.supabase
+          .from('trips')
+          .select('pickuplocations')
+          .eq('id', tripId)
+          .single();
+        
+        if (tripData?.pickuplocations && tripData.pickuplocations.length > 0) {
+          const pickups = Array.isArray(tripData.pickuplocations) 
+            ? tripData.pickuplocations 
+            : JSON.parse(tripData.pickuplocations);
+          
+          for (const pickup of pickups) {
+            const address = pickup.location || pickup.address;
+            if (!address) continue;
+            
+            const coords = await this.geocodeAddress(address);
+            if (!coords) continue;
+            
+            const distToLoading = this.calculateDistance(latitude, longitude, coords.lat, coords.lng);
+            if (distToLoading <= 700) {
+              return { authorized: true, stopName: 'At loading location' };
+            }
+          }
+        }
+      }
+      
+      // Check destination
       if (trip && trip.destination_coordinates) {
         const destCoords = trip.destination_coordinates.split(',');
         const destLat = parseFloat(destCoords[0]);

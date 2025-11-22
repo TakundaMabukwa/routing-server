@@ -109,10 +109,8 @@ class CTrackPoller {
       const vehicle = this.vehicleDB.getVehicle(position.vehicleId);
       if (vehicle) {
         vehicleData.Plate = vehicle.registration_number || vehicle.display_name || position.vehicleId;
-        console.log(`✅ Found vehicle: ${position.vehicleId} -> ${vehicleData.Plate}`);
       } else {
         vehicleData.Plate = position.vehicleId;
-        console.log(`❌ Vehicle not found in DB: ${position.vehicleId}`);
       }
 
       if (position.driverId && position.driverId !== '') {
@@ -132,8 +130,6 @@ class CTrackPoller {
         }
       }
 
-      console.log('📍 C-Track Vehicle Data:', JSON.stringify(vehicleData, null, 2));
-      
       this.vehicleDB.saveFormattedVehicle(vehicleData);
       
       if (this.vehicleCache) {
@@ -221,14 +217,12 @@ class CTrackPoller {
   async loadDriversForVehicles() {
     const vehicles = this.vehicleDB.getAllVehicles();
     const vehiclesWithDrivers = vehicles.filter(v => v.driver_id);
-    console.log(`👥 Loading ${vehiclesWithDrivers.length} drivers...`);
     
     for (const vehicle of vehiclesWithDrivers) {
       if (!this.driverCache.has(vehicle.driver_id)) {
         const driver = await this.client.getDriver(vehicle.driver_id);
         if (driver) {
           this.driverCache.set(vehicle.driver_id, driver);
-          console.log(`👤 ${vehicle.registration_number}: ${driver.displayName || driver.surname}`);
         }
       }
     }

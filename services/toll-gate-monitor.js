@@ -125,11 +125,12 @@ class TollGateMonitor {
     };
   }
 
-  async checkVehicleLocation(vehicleData) {
+  async checkVehicleLocation(vehicleData, hasActiveTrip = false) {
     try {
       const { Plate: plate, DriverName: driverName, Latitude: lat, Longitude: lon } = vehicleData;
       
       if (!lat || !lon || (lat === 0 && lon === 0)) return;
+      if (!hasActiveTrip) return;
 
       const alertKey = `tollgate:${plate}`;
       if (this.vehicleAlerts.has(alertKey)) return;

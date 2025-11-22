@@ -17,7 +17,7 @@ class HighRiskMonitor {
     this.supabase = createClient(supabaseUrl, supabaseKey);
     this.highRiskZones = [];
     this.vehicleAlerts = new Map();
-    this.ALERT_COOLDOWN = 5 * 60 * 1000;
+    this.ALERT_COOLDOWN = 30 * 60 * 1000;
     
     this.initLocalDB();
     this.loadHighRiskZones();
