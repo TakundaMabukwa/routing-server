@@ -22,6 +22,7 @@ class TripMonitorUltraMinimal {
     this.stopPointsCache = new Map();
     this.geocodeCache = new Map();
     this.destinationAlerts = new Map();
+    this.tripLocationsCache = new Map();
     
     // Debounce tracking for Supabase writes
     this.lastSupabaseWrite = new Map();
@@ -111,6 +112,8 @@ class TripMonitorUltraMinimal {
         }
       }
       
+      await this.cacheTripLocations(trips);
+      
       console.log(`✅ Loaded ${trips.length} trips (one-time Supabase query)`);
     } catch (error) {
       console.error('❌ Error loading trips:', error.message);
@@ -135,6 +138,24 @@ class TripMonitorUltraMinimal {
       this.stopPointsCache.set(sp.id, sp);
     }
     console.log(`📍 Cached ${stopPoints.length} stop points`);
+  }
+
+  async cacheTripLocations(trips) {
+    for (const trip of trips) {
+      const { data: tripData } = await this.supabase
+        .from('trips')
+        .select('pickuplocations, dropofflocations')
+        .eq('id', trip.id)
+        .single();
+      
+      if (tripData) {
+        this.tripLocationsCache.set(trip.id, {
+          pickuplocations: tripData.pickuplocations,
+          dropofflocations: tripData.dropofflocations
+        });
+      }
+    }
+    console.log(`📍 Cached locations for ${trips.length} trips`);
   }
 
   async processVehicleData(vehicleData) {
@@ -333,18 +354,14 @@ class TripMonitorUltraMinimal {
     try {
       const trip = this.activeTrips.get(tripId);
       
-      // Check loading location
+      // Check loading location from cache
       if (trip) {
-        const { data: tripData } = await this.supabase
-          .from('trips')
-          .select('pickuplocations')
-          .eq('id', tripId)
-          .single();
+        const cachedLocations = this.tripLocationsCache.get(tripId);
         
-        if (tripData?.pickuplocations && tripData.pickuplocations.length > 0) {
-          const pickups = Array.isArray(tripData.pickuplocations) 
-            ? tripData.pickuplocations 
-            : JSON.parse(tripData.pickuplocations);
+        if (cachedLocations?.pickuplocations && cachedLocations.pickuplocations.length > 0) {
+          const pickups = Array.isArray(cachedLocations.pickuplocations) 
+            ? cachedLocations.pickuplocations 
+            : JSON.parse(cachedLocations.pickuplocations);
           
           for (const pickup of pickups) {
             const address = pickup.location || pickup.address;
@@ -456,17 +473,12 @@ class TripMonitorUltraMinimal {
       const destinationKey = `destination:${trip.id}`;
       if (this.destinationAlerts.has(destinationKey)) return;
       
-      const { data: tripData } = await this.supabase
-        .from('trips')
-        .select('dropofflocations')
-        .eq('id', trip.id)
-        .single();
+      const cachedLocations = this.tripLocationsCache.get(trip.id);
+      if (!cachedLocations?.dropofflocations || cachedLocations.dropofflocations.length === 0) return;
       
-      if (!tripData?.dropofflocations || tripData.dropofflocations.length === 0) return;
-      
-      const dropoffs = Array.isArray(tripData.dropofflocations) 
-        ? tripData.dropofflocations 
-        : JSON.parse(tripData.dropofflocations);
+      const dropoffs = Array.isArray(cachedLocations.dropofflocations) 
+        ? cachedLocations.dropofflocations 
+        : JSON.parse(cachedLocations.dropofflocations);
       
       for (const dropoff of dropoffs) {
         const address = dropoff.location || dropoff.address;
