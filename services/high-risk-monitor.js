@@ -155,7 +155,7 @@ class HighRiskMonitor {
     return distance(from, to, { units: 'meters' });
   }
 
-  async checkVehicleLocation(vehicleData) {
+  async checkVehicleLocation(vehicleData, tripId = null) {
     try {
       const { Plate: plate, DriverName: driverName, Latitude: lat, Longitude: lng } = vehicleData;
       
@@ -167,12 +167,10 @@ class HighRiskMonitor {
         const isInZone = this.isVehicleInZone(lat, lng, zone);
         
         if (isInZone) {
-          // Check if alert was sent in last 3 hours (from SQLite)
           const shouldSendAlert = this.shouldSendAlert(plate, zone.id);
           
           if (shouldSendAlert) {
-            // Send alert to Supabase and store in SQLite
-            await this.sendHighRiskAlert(plate, driverName, lat, lng, zone);
+            await this.sendHighRiskAlert(plate, driverName, lat, lng, zone, tripId);
             console.log(`🚨 HIGH RISK ALERT: ${plate} (${driverName}) entered ${zone.name}`);
           }
         }
@@ -216,17 +214,15 @@ class HighRiskMonitor {
     return !recentAlert; // Send alert if no recent alert found
   }
 
-  async sendHighRiskAlert(plate, driverName, lat, lng, zone) {
+  async sendHighRiskAlert(plate, driverName, lat, lng, zone, tripId = null) {
     try {
       const timestamp = new Date().toISOString();
       
-      // Store in SQLite first
       this.db.prepare(`
         INSERT INTO high_risk_alerts (plate, zone_id, zone_name, latitude, longitude, timestamp, synced_to_supabase)
         VALUES (?, ?, ?, ?, ?, ?, 1)
       `).run(plate, zone.id, zone.name, lat, lng, timestamp);
       
-      // Send to Supabase
       const alert = {
         company: this.company,
         plate: plate,
@@ -247,9 +243,47 @@ class HighRiskMonitor {
       
       if (error) throw error;
       
+      // Flag trip if tripId provided
+      if (tripId) {
+        await this.flagTripInHighRisk(tripId, zone.name, lat, lng, timestamp);
+      }
+      
       console.log(`✅ Alert sent to Supabase and stored in SQLite: ${plate} in ${zone.name}`);
     } catch (error) {
       console.error('Error sending high-risk alert:', error.message);
+    }
+  }
+  
+  async flagTripInHighRisk(tripId, zoneName, lat, lng, timestamp) {
+    try {
+      const { data: trip } = await this.supabase
+        .from('trips')
+        .select('alert_message')
+        .eq('id', tripId)
+        .single();
+      
+      const alerts = trip?.alert_message || [];
+      alerts.push({
+        type: 'high_risk_zone',
+        message: `Vehicle entered high-risk zone: ${zoneName}`,
+        zone_name: zoneName,
+        latitude: lat,
+        longitude: lng,
+        timestamp
+      });
+      
+      await this.supabase
+        .from('trips')
+        .update({
+          alert_type: 'high_risk_zone',
+          alert_message: alerts,
+          alert_timestamp: timestamp,
+          status: 'alert',
+          updated_at: timestamp
+        })
+        .eq('id', tripId);
+    } catch (error) {
+      console.error('❌ Error flagging trip in high-risk zone:', error.message);
     }
   }
 }

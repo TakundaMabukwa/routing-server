@@ -268,6 +268,17 @@ class EPSRewardSystem {
     try {
       const driverState = this.getLocalDriverState(driverName);
       
+      // Check if data actually changed
+      const existing = this.db.prepare('SELECT * FROM driver_rewards WHERE driver_name = ?').get(driverName);
+      
+      if (existing && 
+          existing.current_points === driverState.current_points &&
+          existing.speed_violations_count === driverState.speed_violations_count &&
+          existing.harsh_braking_count === driverState.harsh_braking_count &&
+          existing.night_driving_count === driverState.night_driving_count) {
+        return; // No changes, skip write
+      }
+      
       // Store in local SQLite database
       this.db.prepare(`
         INSERT OR REPLACE INTO driver_rewards (

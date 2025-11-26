@@ -201,10 +201,11 @@ function setupWebSocket(company, ws) {
     }
     
     // Process through trip monitoring system
+    let activeTripId = null;
     if (vehicleData.DriverName && vehicleData.Latitude && vehicleData.Longitude) {
       try {
         const monitor = company === 'eps' ? borderMonitor : null;
-        await tripMonitors[company].processVehicleData(vehicleData, monitor);
+        activeTripId = await tripMonitors[company].processVehicleData(vehicleData, monitor);
       } catch (error) {
         console.error('Error processing trip monitoring data:', error);
       }
@@ -213,7 +214,7 @@ function setupWebSocket(company, ws) {
     // Check for high-risk zone entry (EPS only)
     if (company === 'eps' && vehicleData.Latitude && vehicleData.Longitude) {
       try {
-        await highRiskMonitor.checkVehicleLocation(vehicleData);
+        await highRiskMonitor.checkVehicleLocation(vehicleData, activeTripId);
       } catch (error) {
         console.error('Error checking high-risk zones:', error);
       }
@@ -268,7 +269,7 @@ app.use('/api/stats', statsRoutes);
 // Test endpoint for high-risk zone simulation
 app.post('/api/test/high-risk-zone', async (req, res) => {
   try {
-    const { plate, driverName, latitude, longitude } = req.body;
+    const { plate, driverName, latitude, longitude, tripId } = req.body;
     
     if (!plate || !latitude || !longitude) {
       return res.status(400).json({ error: 'plate, latitude, and longitude are required' });
@@ -283,12 +284,13 @@ app.post('/api/test/high-risk-zone', async (req, res) => {
       LocTime: new Date().toISOString()
     };
     
-    await highRiskMonitor.checkVehicleLocation(testVehicleData);
+    await highRiskMonitor.checkVehicleLocation(testVehicleData, tripId);
     
     res.json({
       success: true,
       message: 'High-risk zone check completed',
-      vehicle: testVehicleData
+      vehicle: testVehicleData,
+      tripId
     });
   } catch (error) {
     console.error('Test error:', error);

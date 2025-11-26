@@ -167,11 +167,26 @@ class BorderMonitor {
       
       this.db.prepare('INSERT INTO border_alerts (trip_id, border_name, timestamp) VALUES (?, ?, ?)').run(tripId, borderName, timestamp);
       
+      const { data: trip } = await this.supabase
+        .from('trips')
+        .select('alert_message')
+        .eq('id', tripId)
+        .single();
+      
+      const alerts = trip?.alert_message || [];
+      alerts.push({
+        type: 'at_border',
+        message: `Vehicle at border stop: ${borderName}`,
+        border_name: borderName,
+        distance_km: (distance / 1000).toFixed(2),
+        timestamp
+      });
+      
       await this.supabase
         .from('trips')
         .update({
           alert_type: 'at_border',
-          alert_message: `Vehicle at border stop: ${borderName}`,
+          alert_message: alerts,
           alert_timestamp: timestamp,
           status: 'at-border',
           updated_at: timestamp

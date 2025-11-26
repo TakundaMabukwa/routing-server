@@ -363,14 +363,31 @@ class TripMonitorMinimal {
 
   async flagUnauthorizedStop(tripId, latitude, longitude, reason) {
     try {
+      const timestamp = new Date().toISOString();
+      
+      const { data: trip } = await this.supabase
+        .from('trips')
+        .select('alert_messages')
+        .eq('id', tripId)
+        .single();
+      
+      const alerts = trip?.alert_messages || [];
+      alerts.push({
+        type: 'unauthorized_stop',
+        message: `Unauthorized stop: ${reason}`,
+        latitude,
+        longitude,
+        timestamp
+      });
+      
       await this.supabase
         .from('trips')
         .update({
           alert_type: 'unauthorized_stop',
-          alert_message: `Unauthorized stop: ${reason}`,
-          alert_timestamp: new Date().toISOString(),
+          alert_messages: alerts,
+          alert_timestamp: timestamp,
           status: 'alert',
-          updated_at: new Date().toISOString()
+          updated_at: timestamp
         })
         .eq('id', tripId);
     } catch (error) {

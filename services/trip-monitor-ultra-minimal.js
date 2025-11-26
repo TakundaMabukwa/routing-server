@@ -372,6 +372,7 @@ class TripMonitorUltraMinimal {
             
             const distToLoading = this.calculateDistance(latitude, longitude, coords.lat, coords.lng);
             if (distToLoading <= 700) {
+              await this.checkLoadingLocationDuration(tripId, address, latitude, longitude);
               return { authorized: true, stopName: 'At loading location' };
             }
           }
@@ -440,15 +441,32 @@ class TripMonitorUltraMinimal {
       
       // Only write to Supabase if cooldown period has passed
       if (now - lastWrite >= this.SUPABASE_WRITE_COOLDOWN) {
-        const vehicleInfo = plate ? `Vehicle ${plate} - ` : '';
-        const geozoneInfo = geozone ? ` | Geozone: ${geozone}` : '';
+        const timestamp = new Date().toISOString();
+        
+        const { data: trip } = await this.supabase
+          .from('trips')
+          .select('alert_message')
+          .eq('id', tripId)
+          .single();
+        
+        const alerts = trip?.alert_message || [];
+        alerts.push({
+          type: 'unauthorized_stop',
+          message: `Unauthorized stop: ${reason}`,
+          plate: plate || null,
+          geozone: geozone || null,
+          latitude,
+          longitude,
+          timestamp
+        });
+        
         await this.supabase
           .from('trips')
           .update({
             alert_type: 'unauthorized_stop',
-            alert_message: `${vehicleInfo}Unauthorized stop: ${reason}${geozoneInfo}`,
-            alert_timestamp: new Date().toISOString(),
-            updated_at: new Date().toISOString()
+            alert_message: alerts,
+            alert_timestamp: timestamp,
+            updated_at: timestamp
           })
           .eq('id', tripId);
         
@@ -471,7 +489,7 @@ class TripMonitorUltraMinimal {
   async checkDestinationProximity(trip, lat, lon) {
     try {
       const destinationKey = `destination:${trip.id}`;
-      if (this.destinationAlerts.has(destinationKey)) return;
+      const arrivalTime = this.destinationAlerts.get(destinationKey);
       
       const cachedLocations = this.tripLocationsCache.get(trip.id);
       if (!cachedLocations?.dropofflocations || cachedLocations.dropofflocations.length === 0) return;
@@ -490,18 +508,29 @@ class TripMonitorUltraMinimal {
         const dist = this.calculateDistance(lat, lon, coords.lat, coords.lng);
         
         if (dist <= 700) {
-          await this.supabase
-            .from('trips')
-            .update({
-              alert_type: 'at_destination',
-              alert_message: `🎯 Driver arrived at destination: ${address} (${Math.round(dist)}m away)`,
-              alert_timestamp: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', trip.id);
-          
-          console.log(`🎯 AT DESTINATION: Trip ${trip.id} - ${Math.round(dist)}m from ${address}`);
-          this.destinationAlerts.set(destinationKey, Date.now());
+          if (!arrivalTime) {
+            this.destinationAlerts.set(destinationKey, Date.now());
+            console.log(`🎯 AT DESTINATION: Trip ${trip.id} - ${Math.round(dist)}m from ${address}`);
+          } else {
+            const duration = Date.now() - arrivalTime;
+            if (duration > 30 * 60 * 1000 && !this.destinationAlerts.has(`late_dropoff:${trip.id}`)) {
+              const timestamp = new Date().toISOString();
+              const { data: tripData } = await this.supabase.from('trips').select('alert_message').eq('id', trip.id).single();
+              const alerts = tripData?.alert_message || [];
+              alerts.push({
+                type: 'late_at_dropoff',
+                message: `Vehicle late - over 30 minutes at drop-off location`,
+                location: address,
+                duration_minutes: Math.round(duration / 60000),
+                latitude: lat,
+                longitude: lon,
+                timestamp
+              });
+              await this.supabase.from('trips').update({ alert_type: 'late_at_dropoff', alert_message: alerts, alert_timestamp: timestamp, updated_at: timestamp }).eq('id', trip.id);
+              this.destinationAlerts.set(`late_dropoff:${trip.id}`, Date.now());
+              console.log(`⏰ LATE AT DROPOFF: Trip ${trip.id} - ${Math.round(duration / 60000)} minutes`);
+            }
+          }
           break;
         }
       }
@@ -510,6 +539,39 @@ class TripMonitorUltraMinimal {
     }
   }
   
+  async checkLoadingLocationDuration(tripId, address, lat, lon) {
+    try {
+      const loadingKey = `loading:${tripId}`;
+      const arrivalTime = this.destinationAlerts.get(loadingKey);
+      
+      if (!arrivalTime) {
+        this.destinationAlerts.set(loadingKey, Date.now());
+        console.log(`📦 AT LOADING: Trip ${tripId}`);
+      } else {
+        const duration = Date.now() - arrivalTime;
+        if (duration > 30 * 60 * 1000 && !this.destinationAlerts.has(`late_loading:${tripId}`)) {
+          const timestamp = new Date().toISOString();
+          const { data: tripData } = await this.supabase.from('trips').select('alert_message').eq('id', tripId).single();
+          const alerts = tripData?.alert_message || [];
+          alerts.push({
+            type: 'late_at_loading',
+            message: `Vehicle late - over 30 minutes at loading location`,
+            location: address,
+            duration_minutes: Math.round(duration / 60000),
+            latitude: lat,
+            longitude: lon,
+            timestamp
+          });
+          await this.supabase.from('trips').update({ alert_type: 'late_at_loading', alert_message: alerts, alert_timestamp: timestamp, updated_at: timestamp }).eq('id', tripId);
+          this.destinationAlerts.set(`late_loading:${tripId}`, Date.now());
+          console.log(`⏰ LATE AT LOADING: Trip ${tripId} - ${Math.round(duration / 60000)} minutes`);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error checking loading duration:', error.message);
+    }
+  }
+
   async geocodeAddress(address) {
     try {
       const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
