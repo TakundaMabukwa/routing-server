@@ -1,0 +1,161 @@
+Endpoint,Category,Field Name,Sample Value,Description
+Vehicle/GetVehicles,Identification,id,VEHICLE-NA-CTOS-NX35-E0024C6B69D75C6F,Vehicle unique identifier
+Vehicle/GetVehicles,Identification,serialNumber,CTOS-NX35-E0024C6B69D75C6F,Device serial number
+Vehicle/GetVehicles,Identification,displayName,KK81SRGP,Vehicle display name (usually registration)
+Vehicle/GetVehicles,Identification,fleetNumber,1363,Fleet tracking number
+Vehicle/GetVehicles,Identification,registrationNumber,KK81SRGP,Vehicle registration/plate number
+Vehicle/GetVehicles,Identification,vin,AAM29K0940PX44145,Vehicle Identification Number
+Vehicle/GetVehicles,Vehicle Details,make,M A N,Vehicle manufacturer
+Vehicle/GetVehicles,Vehicle Details,model,TGS 26.440,Vehicle model
+Vehicle/GetVehicles,Vehicle Details,color,WHITE,Vehicle color
+Vehicle/GetVehicles,Driver Assignment,driverId,345118a0-3157-434f-84d3-8560caa768c1,Current driver UUID
+Vehicle/GetVehicles,Metrics,odometer,579259183,Odometer reading in meters
+Vehicle/GetVehicles,Metrics,runningHours,17142043,Engine running hours in seconds
+Vehicle/GetVehicles,Metrics,totalDriveTime,13589,Total drive time in seconds
+Vehicle/GetVehicles,Metrics,totalStopTime,38068,Total stop time in seconds
+Vehicle/GetVehicles,Timestamps,firstStartUpTime,2025-12-04T02:20:54,First ignition on time today
+Vehicle/GetVehicles,Timestamps,lastReportedTime,2025-12-04T12:35:39,Last GPS report timestamp
+Vehicle/GetVehicles,Device Info,devicesList[].id,CTOS-NX35-E0024C6B69D75C6F,Device identifier
+Vehicle/GetVehicles,Device Info,devicesList[].unitType,CTOS,Device unit type
+Vehicle/GetVehicles,Device Info,devicesList[].hardwareType,NX35,Device hardware model
+Vehicle/LastDevicePosition,System,tenantId,3572298,Tenant/Account identifier
+Vehicle/LastDevicePosition,System,deviceId,CTOS-NX35-E0024C6B69D78162,Tracking device unique identifier
+Vehicle/LastDevicePosition,System,vehicleId,VEHICLE-NA-CTOS-NX35-E0024C6B69D78162,Vehicle unique identifier
+Vehicle/LastDevicePosition,Timestamps,eventDateTimeUTC,2025-12-04T13:22:00,Event timestamp in UTC
+Vehicle/LastDevicePosition,Timestamps,tripStartDateUTC,0001-01-01T00:00:00,Trip start time in UTC
+Vehicle/LastDevicePosition,GPS Data,latitude,-31.59476,GPS latitude coordinate
+Vehicle/LastDevicePosition,GPS Data,longitude,28.78631,GPS longitude coordinate
+Vehicle/LastDevicePosition,GPS Data,altitude,-1,Altitude in meters (-1 if unavailable)
+Vehicle/LastDevicePosition,GPS Data,heading,360,Direction heading in degrees (0-360)
+Vehicle/LastDevicePosition,Metrics,runningOdo,,Running odometer reading
+Vehicle/LastDevicePosition,Metrics,runningHours,24270965,Engine running hours (mileage)
+Vehicle/LastDevicePosition,Metrics,deltaOdo,-1,Change in odometer since last reading
+Vehicle/LastDevicePosition,Metrics,speed,0,Current speed in km/h
+Vehicle/LastDevicePosition,Metrics,maxSpeed,-1,Maximum speed recorded (-1 if unavailable)
+Vehicle/LastDevicePosition,Vehicle Status,ignition,FALSE,Ignition status (TRUE/FALSE)
+Vehicle/LastDevicePosition,Vehicle Status,singleStatus,18,Single status code
+Vehicle/LastDevicePosition,Vehicle Status,statusText,Driving,Human-readable status text
+Vehicle/LastDevicePosition,Vehicle Status,allStatuses,,All status flags combined
+Vehicle/LastDevicePosition,Driver Info,driverTag,,Driver RFID tag identifier
+Vehicle/LastDevicePosition,Driver Info,driverId,c4f90b1f-c933-4049-baa0-0ad7fe9f8c63,Driver unique identifier (UUID)
+Vehicle/LastDevicePosition,Edge Computing,edgeCompute,,Edge computing data
+Vehicle/LastDevicePosition,Location Details,locationDetail.id,3572298_445,Location/geofence identifier
+Vehicle/LastDevicePosition,Location Details,locationDetail.name,GAME UMTATA,Location/geofence name
+Vehicle/LastDevicePosition,Location Details,locationDetail.distance,0,Distance from location in meters
+Vehicle/LastDevicePosition,Location Details,locationDetail.direction,NE,Direction from location (compass)
+Vehicle/LastDevicePosition,Address,address.country,ZAF,Country code (ISO 3166-1 alpha-3)
+Vehicle/LastDevicePosition,Address,address.state,Eastern Cape,Province/State name
+Vehicle/LastDevicePosition,Address,address.county,King Sabata Dalindyebo,County/Region name
+Vehicle/LastDevicePosition,Address,address.city,Mthatha,City name
+Vehicle/LastDevicePosition,Address,address.postalcode,5100,Postal/ZIP code
+Vehicle/LastDevicePosition,Address,address.functionalclass,5,Road functional classification
+Vehicle/LastDevicePosition,Address,address.streetlimit,60,Speed limit on street (km/h)
+Vehicle/LastDevicePosition,Address,address.district,,District name
+Vehicle/LastDevicePosition,Address,address.street,,Street name
+Drivers,System,id,c4f90b1f-c933-4049-baa0-0ad7fe9f8c63,Driver unique identifier (UUID)
+Drivers,System,version,string,Record version
+Drivers,System,tenantId,3572298,Tenant/Account identifier
+Drivers,System,driverId,string,Driver ID reference
+Drivers,Timestamps,creation,0,Creation timestamp (Unix epoch)
+Drivers,Timestamps,lastUpdatedTime,0,Last update timestamp (Unix epoch)
+Drivers,Timestamps,createdDateTime,2024-07-29T15:51:28.071Z,Creation date/time (ISO 8601)
+Drivers,Timestamps,lastUpdatedBy,string,User who last updated record
+Drivers,Timestamps,createdBy,string,User who created record
+Drivers,Personal Info,displayName,John Doe,Driver display name
+Drivers,Personal Info,givenName,John,First name
+Drivers,Personal Info,surname,Doe,Last name/surname
+Drivers,Personal Info,name,John Doe,Full name
+Drivers,Personal Info,mailNickname,jdoe,Email nickname
+Drivers,Personal Info,identificationNumber,8501015800080,ID/Passport number
+Drivers,Contact Info,emailId,john@example.com,Primary email address
+Drivers,Contact Info,mail,john@example.com,Email address
+Drivers,Contact Info,otherMails,[],Additional email addresses
+Drivers,Contact Info,mobilePhone,+27821234567,Mobile phone number
+Drivers,Contact Info,emergencyContactInfo,{},Emergency contact details (name; email; mobile; relationship)
+Drivers,Address,streetAddress,123 Main St,Street address
+Drivers,Address,city,Johannesburg,City
+Drivers,Address,state,Gauteng,Province/State
+Drivers,Address,country,ZAF,Country code
+Drivers,Address,postalCode,2000,Postal/ZIP code
+Drivers,Address,homeLocation,string,Home location address
+Drivers,Address,workLocation,string,Work location address
+Drivers,Address,officeLocation,string,Office location
+Drivers,Address,latitude,0,GPS latitude
+Drivers,Address,longitude,0,GPS longitude
+Drivers,Employment,jobTitle,Truck Driver,Job title/position
+Drivers,Employment,department,Logistics,Department name
+Drivers,Employment,isDriver,true,Is this user a driver
+Drivers,Employment,isDriverTextValue,Yes,Driver status as text
+Drivers,Employment,skillsSet,[],Driver skills/certifications
+Drivers,Employment,description,string,Driver description/notes
+Drivers,Account,accountEnabled,true,Account active status
+Drivers,Account,accountEnabledValue,Active,Account status as text
+Drivers,Account,accountLocked,false,Account locked status
+Drivers,Account,userPrincipalName,string,User principal name
+Drivers,Account,preferredLanguage,en,Preferred language code
+Drivers,Account,freeze,false,Account frozen status
+Drivers,Account,isSystemUser,false,Is system/admin user
+Drivers,Security,passwordHint,string,Password hint
+Drivers,Security,passwordExpiry,string,Password expiry date
+Drivers,Security,passwordExpirySchedulerPolicyId,string,Password policy ID
+Drivers,Security,previousPassword,string,Previous password hash
+Drivers,Security,invalidPasswordCount,0,Failed login attempts
+Drivers,Security,lastInvalidPasswordEntryTime,string,Last failed login time
+Drivers,Security,otp,0,One-time password
+Drivers,Security,otpExpiry,string,OTP expiration time
+Drivers,Driver Specific,rfid,string,RFID tag number
+Drivers,Driver Specific,driverTag,string,Driver tag identifier
+Drivers,Driver Specific,driverTagExpiry,string,Tag expiry date
+Drivers,Driver Specific,driverTagCategories,string,Tag categories
+Drivers,Driver Specific,driverTagExpirySchedulerPolicyId,string,Tag expiry policy ID
+Drivers,Driver Specific,taggedOnly,false,Tagged drivers only flag
+Drivers,Driver Specific,driverProfileImage,string,Driver photo URL
+Drivers,Driver Specific,defaultDisplayName,string,Default display name
+Drivers,Driver Specific,defaultDriverId,string,Default driver ID
+Drivers,Driver Specific,manuallyAssigned,string,Manual assignment flag
+Drivers,Assignments,assignedVehicle,{},Currently assigned vehicle object
+Drivers,Assignments,assignedVehicleId,string,Assigned vehicle ID
+Drivers,Assignments,assignedDriverGroups,[],Assigned driver groups
+Drivers,Permissions,rolesAssigned,[],Assigned roles (roleId; roleName)
+Drivers,Permissions,driverAllowedNotification,[],Allowed notification types
+Drivers,Permissions,userPrivacy,false,User privacy setting
+Drivers,Permissions,privacy,false,Privacy flag
+Drivers,Permissions,operatorFlags,0,Operator permission flags
+Drivers,Firebase,firebaseRegisteredId,string,Firebase registration ID
+Drivers,Firebase,firebaseToken,string,Firebase push token
+Drivers,Firebase,firebaseTokenList,[],List of Firebase tokens
+Drivers,Terms,termsAndConditionAcceptTime,string,T&C acceptance timestamp
+Drivers,Profile,profileImage,string,Profile image URL
+Drivers,Profile,contactInfo,{},Contact information object
+Drivers,Profile,groups,[],User groups
+Drivers,Profile,value,[],Additional values
+Drivers,System Flags,error,string,Error message if any
+Drivers,System Flags,updated,false,Update flag
+Drivers,System Flags,bureauTenantId,string,Bureau tenant identifier
+Drivers,System Flags,fieldErrors,[],Field validation errors
+Drivers,Internal,modifiedSkillSets,string,Modified skills data
+Drivers,Internal,userRequestBody,string,Request body data
+Drivers,Internal,updateDriverSkillSetLists,{},Skill set update object
+Sensors/TemperatureProbeReport,Summary,totalAssets,0,Total number of assets with temperature sensors
+Sensors/TemperatureProbeReport,Summary,maxTemp,0,Maximum temperature recorded
+Sensors/TemperatureProbeReport,Summary,minTemp,0,Minimum temperature recorded
+Sensors/TemperatureProbeReport,Summary,avgTemp,0,Average temperature
+Sensors/TemperatureProbeReport,Summary,probeNames,[],List of probe names
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].vehicleName,string,Vehicle name/registration
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].vehicleId,string,Vehicle unique identifier
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].operatorName,string,Operator/driver name
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].operatorId,string,Operator/driver ID
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].tempDateTime,2024-07-29T15:51:28.071Z,Temperature reading timestamp
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].probe1Temp,0,Probe 1 temperature (°C)
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].probe2Temp,0,Probe 2 temperature (°C)
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].probe3Temp,0,Probe 3 temperature (°C)
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].probe4Temp,0,Probe 4 temperature (°C)
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].probe5Temp,0,Probe 5 temperature (°C)
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].probe6Temp,0,Probe 6 temperature (°C)
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].probe7Temp,0,Probe 7 temperature (°C)
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].probe8Temp,0,Probe 8 temperature (°C)
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].statusText,string,Temperature status description
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].latitude,string,GPS latitude
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].longitude,string,GPS longitude
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].location,string,Location name/address
+Sensors/TemperatureProbeReport,Temperature Data,temperatureList[].locationId,string,Location identifier

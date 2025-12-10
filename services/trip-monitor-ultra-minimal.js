@@ -3,6 +3,7 @@ const distance = require('@turf/distance').default;
 const { point } = require('@turf/helpers');
 const Database = require('better-sqlite3');
 const path = require('path');
+const ETAMonitor = require('./eta-monitor');
 
 class TripMonitorUltraMinimal {
   constructor(company = 'eps') {
@@ -23,6 +24,10 @@ class TripMonitorUltraMinimal {
     this.geocodeCache = new Map();
     this.destinationAlerts = new Map();
     this.tripLocationsCache = new Map();
+    this.etaMonitor = new ETAMonitor();
+    this.etaCheckInterval = 30 * 60 * 1000; // Check ETA every 30 minutes
+    this.lastETACheck = new Map();
+    this.lastETAUpdate = new Map(); // Track last Supabase update
     
     // Debounce tracking for Supabase writes
     this.lastSupabaseWrite = new Map();
@@ -95,7 +100,7 @@ class TripMonitorUltraMinimal {
     try {
       const { data: trips } = await this.supabase
         .from('trips')
-        .select('id, vehicleassignments, status, selectedstoppoints, destination_coordinates')
+        .select('id, vehicleassignments, status, selectedstoppoints, destination_coordinates, enddate')
         .not('status', 'in', '(Completed,Delivered)');
       
       if (!trips) return;
@@ -168,6 +173,7 @@ class TripMonitorUltraMinimal {
       if (!activeTrip) return;
 
       this.updateTripLocationLocal(activeTrip.id, lat, lon, speed);
+      await this.checkETAStatus(activeTrip, lat, lon, plate);
       await this.checkDestinationProximity(activeTrip, lat, lon);
       await this.checkHighRiskZone(activeTrip, vehicleData);
       await this.checkTollGate(activeTrip, vehicleData);
@@ -483,6 +489,84 @@ class TripMonitorUltraMinimal {
       
     } catch (error) {
       console.error('❌ Error flagging unauthorized stop:', error.message);
+    }
+  }
+
+  async checkETAStatus(trip, lat, lon, plate) {
+    try {
+      const now = Date.now();
+      const lastCheck = this.lastETACheck.get(trip.id) || 0;
+      
+      if (now - lastCheck < this.etaCheckInterval) return;
+      
+      const cachedLocations = this.tripLocationsCache.get(trip.id);
+      if (!cachedLocations?.dropofflocations || cachedLocations.dropofflocations.length === 0) return;
+      
+      const dropoffs = Array.isArray(cachedLocations.dropofflocations) 
+        ? cachedLocations.dropofflocations 
+        : JSON.parse(cachedLocations.dropofflocations);
+      
+      for (const dropoff of dropoffs) {
+        const address = dropoff.location || dropoff.address;
+        if (!address) continue;
+        
+        const coords = await this.etaMonitor.geocode(address);
+        if (!coords) continue;
+        
+        const deadline = trip.enddate || dropoff.scheduled_time;
+        if (!deadline) continue;
+        
+        const etaStatus = await this.etaMonitor.checkETA(lat, lon, coords.lat, coords.lng, deadline);
+        
+        if (etaStatus) {
+          this.lastETACheck.set(trip.id, now);
+          
+          const timestamp = new Date().toISOString();
+          const { data: tripData } = await this.supabase.from('trips').select('alert_message').eq('id', trip.id).single();
+          const alerts = tripData?.alert_message || [];
+          
+          const etaAlert = {
+            type: etaStatus.status === 'delayed' ? 'eta_delayed' : 'eta_update',
+            message: etaStatus.status === 'delayed' 
+              ? `Vehicle ${plate || 'unknown'} will arrive late by ${Math.abs(etaStatus.buffer_minutes)} minutes`
+              : `Vehicle ${plate || 'unknown'} on track - ${etaStatus.buffer_minutes} min buffer`,
+            reason: etaStatus.status === 'delayed' 
+              ? `Traffic conditions indicate arrival will be ${Math.abs(etaStatus.buffer_minutes)} minutes late`
+              : 'Vehicle is on schedule based on current road conditions',
+            eta: etaStatus.eta,
+            possible_eta: etaStatus.eta,
+            deadline: etaStatus.deadline,
+            duration_minutes: etaStatus.duration_minutes,
+            distance_km: etaStatus.distance_km,
+            buffer_minutes: etaStatus.buffer_minutes,
+            destination: address,
+            latitude: lat,
+            longitude: lon,
+            road_conditions: 'current',
+            timestamp
+          };
+          
+          alerts.push(etaAlert);
+          
+          await this.supabase.from('trips').update({
+            alert_type: etaStatus.status === 'delayed' ? 'eta_delayed' : 'eta_update',
+            alert_message: alerts,
+            alert_timestamp: timestamp,
+            updated_at: timestamp
+          }).eq('id', trip.id);
+          
+          this.lastETAUpdate.set(trip.id, now);
+          
+          if (etaStatus.status === 'delayed') {
+            console.log(`⏰ ETA DELAYED: Trip ${trip.id} - Late by ${Math.abs(etaStatus.buffer_minutes)} min | Possible ETA: ${etaStatus.eta} (${etaStatus.distance_km}km, ${etaStatus.duration_minutes}min drive)`);
+          } else {
+            console.log(`✅ ETA UPDATE: Trip ${trip.id} - ${etaStatus.buffer_minutes} min buffer | ETA: ${etaStatus.eta} (${etaStatus.distance_km}km, ${etaStatus.duration_minutes}min drive)`);
+          }
+        }
+        break;
+      }
+    } catch (error) {
+      console.error('❌ Error checking ETA status:', error.message);
     }
   }
 

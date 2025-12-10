@@ -11,6 +11,7 @@ const HighRiskMonitor = require('./services/high-risk-monitor');
 const TollGateMonitor = require('./services/toll-gate-monitor');
 const BorderMonitor = require('./services/border-monitor');
 const CTrackPoller = require('./services/ctrack-poller');
+const StatusMonitor = require('./services/status-monitor');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -104,6 +105,12 @@ const tollGateMonitor = new TollGateMonitor('eps');
 
 // Initialize Border Monitor for EPS only
 const borderMonitor = new BorderMonitor('eps');
+
+// Initialize Status Monitors per company
+const statusMonitors = {
+  eps: new StatusMonitor('eps'),
+  maysene: new StatusMonitor('maysene')
+};
 
 // Initialize C-Track Poller for EPS
 let ctrackPoller = null;
@@ -359,6 +366,79 @@ app.get('/api/trips/:tripId/unauthorized-stops', (req, res) => {
   res.json({ trip_id: tripId, unauthorized_stops: stops });
 });
 
+// Get ETA status for a trip
+app.get('/api/trips/:tripId/eta', async (req, res) => {
+  try {
+    const tripId = parseInt(req.params.tripId);
+    const company = req.query.company || 'eps';
+    
+    if (!tripMonitors[company]) {
+      return res.status(400).json({ error: 'Invalid company' });
+    }
+    
+    const trip = tripMonitors[company].activeTrips.get(tripId);
+    if (!trip) {
+      return res.status(404).json({ error: 'Trip not found or not active' });
+    }
+    
+    const routeData = tripMonitors[company].getRoutePoints(tripId);
+    if (!routeData || routeData.route_points.length === 0) {
+      return res.status(404).json({ error: 'No GPS data available for this trip' });
+    }
+    
+    const lastPoint = routeData.route_points[routeData.route_points.length - 1];
+    const cachedLocations = tripMonitors[company].tripLocationsCache.get(tripId);
+    
+    if (!cachedLocations?.dropofflocations || cachedLocations.dropofflocations.length === 0) {
+      return res.status(404).json({ error: 'No dropoff location configured' });
+    }
+    
+    const dropoffs = Array.isArray(cachedLocations.dropofflocations) 
+      ? cachedLocations.dropofflocations 
+      : JSON.parse(cachedLocations.dropofflocations);
+    
+    const dropoff = dropoffs[0];
+    const address = dropoff.location || dropoff.address;
+    
+    if (!address) {
+      return res.status(404).json({ error: 'Dropoff address not found' });
+    }
+    
+    const coords = await tripMonitors[company].etaMonitor.geocode(address);
+    if (!coords) {
+      return res.status(500).json({ error: 'Failed to geocode dropoff address' });
+    }
+    
+    const deadline = trip.delivery_date || dropoff.delivery_date;
+    if (!deadline) {
+      return res.status(404).json({ error: 'No delivery deadline configured' });
+    }
+    
+    const etaStatus = await tripMonitors[company].etaMonitor.checkETA(
+      lastPoint.lat,
+      lastPoint.lng,
+      coords.lat,
+      coords.lng,
+      deadline
+    );
+    
+    if (!etaStatus) {
+      return res.status(500).json({ error: 'Failed to calculate ETA' });
+    }
+    
+    res.json({
+      trip_id: tripId,
+      vehicle_location: { lat: lastPoint.lat, lng: lastPoint.lng },
+      destination: address,
+      destination_coords: coords,
+      ...etaStatus
+    });
+  } catch (error) {
+    console.error('Error calculating ETA:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 
 
 // Get cached vehicle data
@@ -479,4 +559,6 @@ wss.on('connection', (ws, req) => {
 app.listen(PORT, () => {
   console.log(`Express server running on port ${PORT}`);
   console.log(`WebSocket server running on port ${WS_PORT}`);
+  console.log('✅ ETA monitoring enabled - updating every 30 minutes');
+  console.log('✅ Status monitoring enabled - checking every 5 minutes');
 });

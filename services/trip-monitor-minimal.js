@@ -3,6 +3,7 @@ const distance = require('@turf/distance').default;
 const { point } = require('@turf/helpers');
 const Database = require('better-sqlite3');
 const path = require('path');
+const ETAMonitor = require('./eta-monitor');
 
 class TripMonitorMinimal {
   constructor(company = 'eps') {
@@ -23,6 +24,9 @@ class TripMonitorMinimal {
     
     this.STOP_DETECTION_TIME = 5 * 60 * 1000;
     this.STATIONARY_RADIUS = 50;
+    this.etaMonitor = new ETAMonitor();
+    this.lastETACheck = new Map();
+    this.ETA_CHECK_INTERVAL = 10 * 60 * 1000;
     
     this.initLocalDB();
     this.loadActiveTripsOnce();
@@ -58,6 +62,12 @@ class TripMonitorMinimal {
         coordinates TEXT,
         radius INTEGER
       );
+      
+      CREATE TABLE IF NOT EXISTS eta_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trip_id INTEGER NOT NULL,
+        timestamp TEXT NOT NULL
+      );
     `);
   }
 
@@ -79,7 +89,7 @@ class TripMonitorMinimal {
     try {
       const { data: trips } = await this.supabase
         .from('trips')
-        .select('id, vehicleassignments, status, selectedstoppoints, alert_type, loading_location_lat, loading_location_lng')
+        .select('id, vehicleassignments, status, selectedstoppoints, alert_type, loading_location_lat, loading_location_lng, dropofflocations')
         .not('status', 'in', '(Completed,Delivered)');
       
       if (!trips) return;
@@ -132,6 +142,7 @@ class TripMonitorMinimal {
 
       this.updateTripLocationLocal(activeTrip.id, lat, lon, speed);
       await this.checkForStops(activeTrip, lat, lon, speed);
+      await this.checkETAStatus(activeTrip, lat, lon);
       
     } catch (error) {
       console.error('❌ Error processing vehicle data:', error.message);
@@ -392,6 +403,90 @@ class TripMonitorMinimal {
         .eq('id', tripId);
     } catch (error) {
       console.error('❌ Error flagging unauthorized stop:', error.message);
+    }
+  }
+
+  async checkETAStatus(trip, currentLat, currentLng) {
+    try {
+      if (!trip.dropofflocations) return;
+      
+      const lastCheck = this.lastETACheck.get(trip.id);
+      if (lastCheck && Date.now() - lastCheck < this.ETA_CHECK_INTERVAL) return;
+      
+      const dropoffs = typeof trip.dropofflocations === 'string' ? JSON.parse(trip.dropofflocations) : trip.dropofflocations;
+      if (!dropoffs || dropoffs.length === 0) return;
+      
+      const finalDropoff = dropoffs[dropoffs.length - 1];
+      if (!finalDropoff.scheduled_time) return;
+      
+      let destLat, destLng;
+      if (finalDropoff.coordinates) {
+        const coords = finalDropoff.coordinates.split(',');
+        destLat = parseFloat(coords[0]);
+        destLng = parseFloat(coords[1]);
+      } else if (finalDropoff.location || finalDropoff.address) {
+        const geocoded = await this.etaMonitor.geocode(finalDropoff.location || finalDropoff.address);
+        if (!geocoded) return;
+        destLat = geocoded.lat;
+        destLng = geocoded.lng;
+      } else {
+        return;
+      }
+      
+      const etaStatus = await this.etaMonitor.checkETA(currentLat, currentLng, destLat, destLng, finalDropoff.scheduled_time);
+      
+      if (etaStatus && !etaStatus.will_arrive_on_time) {
+        const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+        const recent = this.db.prepare('SELECT id FROM eta_alerts WHERE trip_id = ? AND timestamp > ? LIMIT 1').get(trip.id, threeHoursAgo);
+        
+        if (!recent) {
+          await this.flagDelayedTrip(trip.id, etaStatus);
+          console.log(`⏰ DELAYED: Trip ${trip.id} - ${etaStatus.buffer_minutes} min behind`);
+        }
+      }
+      
+      this.lastETACheck.set(trip.id, Date.now());
+    } catch (error) {
+      console.error('❌ Error checking ETA:', error.message);
+    }
+  }
+  
+  async flagDelayedTrip(tripId, etaStatus) {
+    try {
+      const timestamp = new Date().toISOString();
+      
+      this.db.prepare('INSERT INTO eta_alerts (trip_id, timestamp) VALUES (?, ?)').run(tripId, timestamp);
+      
+      const { data: trip } = await this.supabase
+        .from('trips')
+        .select('alert_messages')
+        .eq('id', tripId)
+        .single();
+      
+      const alerts = trip?.alert_messages || [];
+      alerts.push({
+        type: 'delayed_arrival',
+        message: `Vehicle delayed - ${Math.abs(etaStatus.buffer_minutes)} min behind schedule`,
+        eta: etaStatus.eta,
+        deadline: etaStatus.deadline,
+        duration_minutes: etaStatus.duration_minutes,
+        distance_km: etaStatus.distance_km,
+        delay_minutes: Math.abs(etaStatus.buffer_minutes),
+        timestamp
+      });
+      
+      await this.supabase
+        .from('trips')
+        .update({
+          alert_type: 'delayed_arrival',
+          alert_messages: alerts,
+          alert_timestamp: timestamp,
+          status: 'delayed',
+          updated_at: timestamp
+        })
+        .eq('id', tripId);
+    } catch (error) {
+      console.error('❌ Error flagging delayed trip:', error.message);
     }
   }
 
