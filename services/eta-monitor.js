@@ -36,7 +36,7 @@ class ETAMonitor {
     }
   }
 
-  async checkETA(vehicleLat, vehicleLng, destinationLat, destinationLng, deadline) {
+  async checkETA(vehicleLat, vehicleLng, destinationLat, destinationLng, deadline, vehicleLocTime = null) {
     try {
       const cacheKey = `${vehicleLat},${vehicleLng}-${destinationLat},${destinationLng}`;
       const cached = this.etaCache.get(cacheKey);
@@ -45,13 +45,15 @@ class ETAMonitor {
         return this.calculateStatus(cached.duration, deadline);
       }
 
-      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${vehicleLng},${vehicleLat};${destinationLng},${destinationLat}`;
+      // Use Mapbox Directions API with traffic profile for maximum accuracy
+      const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${vehicleLng},${vehicleLat};${destinationLng},${destinationLat}`;
       const response = await axios.get(url, {
         params: {
           access_token: this.mapboxToken,
           geometries: 'geojson',
           overview: 'full',
-          steps: false
+          steps: false,
+          annotations: 'duration,distance'
         }
       });
 
@@ -69,25 +71,38 @@ class ETAMonitor {
         timestamp: Date.now()
       });
 
-      return this.calculateStatus(durationSeconds, deadline, distanceMeters);
+      return this.calculateStatus(durationSeconds, deadline, distanceMeters, vehicleLocTime);
     } catch (error) {
       console.error('❌ Error checking ETA:', error.message);
       return null;
     }
   }
 
-  calculateStatus(durationSeconds, deadline, distanceMeters = null) {
-    const now = new Date();
+  calculateStatus(durationSeconds, deadline, distanceMeters = null, vehicleLocTime = null) {
+    // Use vehicle loc_time if provided, otherwise use server time
+    let now;
+    if (vehicleLocTime) {
+      // Add 2 hours to vehicle time for SAST timezone
+      now = new Date(new Date(vehicleLocTime).getTime() + 2 * 60 * 60 * 1000);
+    } else {
+      now = new Date();
+    }
+    
     const deadlineTime = new Date(deadline);
+    
+    // Add 2 hours to deadline for SAST timezone
+    const adjustedDeadline = new Date(deadlineTime.getTime() + 2 * 60 * 60 * 1000);
+    
     const eta = new Date(now.getTime() + durationSeconds * 1000);
-    const timeRemaining = deadlineTime - now;
+    const timeRemaining = adjustedDeadline - now;
     const timeNeeded = durationSeconds * 1000;
     const buffer = timeRemaining - timeNeeded;
 
     return {
       will_arrive_on_time: buffer > 0,
       eta: eta.toISOString(),
-      deadline: deadlineTime.toISOString(),
+      deadline: adjustedDeadline.toISOString(),
+      original_deadline: deadlineTime.toISOString(),
       duration_minutes: Math.round(durationSeconds / 60),
       distance_km: distanceMeters ? (distanceMeters / 1000).toFixed(1) : null,
       buffer_minutes: Math.round(buffer / 60000),

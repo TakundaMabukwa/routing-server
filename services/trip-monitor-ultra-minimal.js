@@ -1,3 +1,4 @@
+const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 const distance = require('@turf/distance').default;
 const { point } = require('@turf/helpers');
@@ -101,7 +102,7 @@ class TripMonitorUltraMinimal {
       const { data: trips } = await this.supabase
         .from('trips')
         .select('id, vehicleassignments, status, selectedstoppoints, destination_coordinates, enddate')
-        .not('status', 'in', '(Completed,Delivered)');
+        .not('status', 'in', '(Completed,Delivered,Cancelled)');
       
       if (!trips) return;
       
@@ -455,7 +456,11 @@ class TripMonitorUltraMinimal {
           .eq('id', tripId)
           .single();
         
-        const alerts = trip?.alert_message || [];
+        let alerts = trip?.alert_message || [];
+        // Ensure alerts is always an array
+        if (!Array.isArray(alerts)) {
+          alerts = [];
+        }
         alerts.push({
           type: 'unauthorized_stop',
           message: `Unauthorized stop: ${reason}`,
@@ -523,7 +528,12 @@ class TripMonitorUltraMinimal {
           
           const timestamp = new Date().toISOString();
           const { data: tripData } = await this.supabase.from('trips').select('alert_message').eq('id', trip.id).single();
-          const alerts = tripData?.alert_message || [];
+          let alerts = tripData?.alert_message || [];
+          
+          // Ensure alerts is always an array
+          if (!Array.isArray(alerts)) {
+            alerts = [];
+          }
           
           const etaAlert = {
             type: etaStatus.status === 'delayed' ? 'eta_delayed' : 'eta_update',

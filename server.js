@@ -366,7 +366,45 @@ app.get('/api/trips/:tripId/unauthorized-stops', (req, res) => {
   res.json({ trip_id: tripId, unauthorized_stops: stops });
 });
 
-// Get ETA status for a trip
+// Get stored ETA alerts for a trip
+app.get('/api/trips/:tripId/eta-alerts', async (req, res) => {
+  try {
+    const tripId = parseInt(req.params.tripId);
+    const company = req.query.company || 'eps';
+    
+    if (!tripMonitors[company]) {
+      return res.status(400).json({ error: 'Invalid company' });
+    }
+    
+    const { data: trip, error } = await tripMonitors[company].supabase
+      .from('trips')
+      .select('id, alert_message, alert_type, alert_timestamp')
+      .eq('id', tripId)
+      .single();
+    
+    if (error || !trip) {
+      return res.status(404).json({ error: 'Trip not found' });
+    }
+    
+    const alerts = trip.alert_message || [];
+    const etaAlerts = alerts.filter(a => 
+      a.type === 'eta_delayed' || a.type === 'eta_update'
+    );
+    
+    res.json({
+      trip_id: tripId,
+      latest_alert_type: trip.alert_type,
+      latest_alert_timestamp: trip.alert_timestamp,
+      eta_alerts: etaAlerts,
+      total_alerts: etaAlerts.length
+    });
+  } catch (error) {
+    console.error('Error fetching ETA alerts:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get ETA status for a trip using real-time vehicle location
 app.get('/api/trips/:tripId/eta', async (req, res) => {
   try {
     const tripId = parseInt(req.params.tripId);
@@ -376,27 +414,107 @@ app.get('/api/trips/:tripId/eta', async (req, res) => {
       return res.status(400).json({ error: 'Invalid company' });
     }
     
-    const trip = tripMonitors[company].activeTrips.get(tripId);
-    if (!trip) {
-      return res.status(404).json({ error: 'Trip not found or not active' });
+    // Get trip from Supabase (not just active trips cache)
+    const { data: trip, error: tripError } = await tripMonitors[company].supabase
+      .from('trips')
+      .select('id, vehicleassignments, status, enddate, pickuplocations, dropofflocations')
+      .eq('id', tripId)
+      .single();
+    
+    if (tripError) {
+      console.error('Supabase error:', tripError);
+      return res.status(404).json({ error: 'Trip not found', details: tripError.message });
     }
     
-    const routeData = tripMonitors[company].getRoutePoints(tripId);
-    if (!routeData || routeData.route_points.length === 0) {
-      return res.status(404).json({ error: 'No GPS data available for this trip' });
+    if (tripError || !trip) {
+      return res.status(404).json({ error: 'Trip not found' });
     }
     
-    const lastPoint = routeData.route_points[routeData.route_points.length - 1];
-    const cachedLocations = tripMonitors[company].tripLocationsCache.get(tripId);
+    // Get vehicle plate from trip
+    const plate = tripMonitors[company].getVehiclePlateFromAssignments(trip);
+    if (!plate) {
+      return res.status(404).json({ error: 'No vehicle assigned to trip' });
+    }
     
-    if (!cachedLocations?.dropofflocations || cachedLocations.dropofflocations.length === 0) {
+    // Get real-time vehicle location from telematics cache or TCP API
+    const vehicleKey = `${company}:${plate}`;
+    let vehicleData = vehicleDataCache.get(vehicleKey);
+    
+    // If not in cache, fetch from TCP API for Maysene
+    if ((!vehicleData || !vehicleData.Latitude || !vehicleData.Longitude) && company === 'maysene') {
+      try {
+        const tcpUrl = process.env.TCP_BASE_URL || 'http://64.227.138.235:3000/api/maysene-vehicles';
+        const response = await axios.get(tcpUrl);
+        const vehicles = response.data.data || [];
+        const vehicle = vehicles.find(v => v.plate === plate);
+        
+        if (vehicle && vehicle.latitude && vehicle.longitude) {
+          vehicleData = {
+            Latitude: parseFloat(vehicle.latitude),
+            Longitude: parseFloat(vehicle.longitude),
+            Speed: parseFloat(vehicle.speed || 0),
+            LocTime: vehicle.loc_time
+          };
+        }
+      } catch (error) {
+        console.error('Error fetching from TCP API:', error.message);
+      }
+    }
+    
+    let currentLat, currentLng, lastUpdate, dataAge;
+    
+    if (vehicleData && vehicleData.Latitude && vehicleData.Longitude) {
+      // Use real-time GPS data
+      currentLat = vehicleData.Latitude;
+      currentLng = vehicleData.Longitude;
+      lastUpdate = vehicleData.LocTime || new Date().toISOString();
+      
+      // Check if GPS data is stale (older than 1 hour)
+      const gpsTime = new Date(lastUpdate);
+      const now = new Date();
+      dataAge = Math.floor((now - gpsTime) / 1000 / 60); // minutes
+      
+      if (dataAge > 60) {
+        return res.status(400).json({ 
+          error: 'GPS data is too old',
+          last_update: lastUpdate,
+          age_minutes: dataAge,
+          message: 'Vehicle has not transmitted GPS data in over 1 hour. ETA cannot be calculated accurately.'
+        });
+      }
+    } else {
+      // Fallback to last known location from route history
+      const routeData = tripMonitors[company].getRoutePoints(tripId);
+      if (!routeData || routeData.route_points.length === 0) {
+        return res.status(404).json({ error: 'No GPS data available for vehicle' });
+      }
+      const lastPoint = routeData.route_points[routeData.route_points.length - 1];
+      currentLat = lastPoint.lat;
+      currentLng = lastPoint.lng;
+      lastUpdate = lastPoint.datetime;
+      
+      // Check age of route history data
+      const gpsTime = new Date(lastUpdate);
+      const now = new Date();
+      dataAge = Math.floor((now - gpsTime) / 1000 / 60);
+      
+      if (dataAge > 60) {
+        return res.status(400).json({ 
+          error: 'GPS data is too old',
+          last_update: lastUpdate,
+          age_minutes: dataAge,
+          message: 'Vehicle has not transmitted GPS data in over 1 hour. ETA cannot be calculated accurately.'
+        });
+      }
+    }
+    
+    // Get dropoff location
+    const dropofflocations = trip.dropofflocations;
+    if (!dropofflocations || dropofflocations.length === 0) {
       return res.status(404).json({ error: 'No dropoff location configured' });
     }
     
-    const dropoffs = Array.isArray(cachedLocations.dropofflocations) 
-      ? cachedLocations.dropofflocations 
-      : JSON.parse(cachedLocations.dropofflocations);
-    
+    const dropoffs = Array.isArray(dropofflocations) ? dropofflocations : JSON.parse(dropofflocations);
     const dropoff = dropoffs[0];
     const address = dropoff.location || dropoff.address;
     
@@ -404,22 +522,26 @@ app.get('/api/trips/:tripId/eta', async (req, res) => {
       return res.status(404).json({ error: 'Dropoff address not found' });
     }
     
+    // Geocode destination address
     const coords = await tripMonitors[company].etaMonitor.geocode(address);
     if (!coords) {
       return res.status(500).json({ error: 'Failed to geocode dropoff address' });
     }
     
-    const deadline = trip.delivery_date || dropoff.delivery_date;
+    // Get deadline
+    const deadline = trip.enddate || dropoff.delivery_date || dropoff.scheduled_time;
     if (!deadline) {
       return res.status(404).json({ error: 'No delivery deadline configured' });
     }
     
+    // Calculate ETA using Mapbox Directions API with real-time traffic
     const etaStatus = await tripMonitors[company].etaMonitor.checkETA(
-      lastPoint.lat,
-      lastPoint.lng,
+      currentLat,
+      currentLng,
       coords.lat,
       coords.lng,
-      deadline
+      deadline,
+      lastUpdate
     );
     
     if (!etaStatus) {
@@ -428,7 +550,13 @@ app.get('/api/trips/:tripId/eta', async (req, res) => {
     
     res.json({
       trip_id: tripId,
-      vehicle_location: { lat: lastPoint.lat, lng: lastPoint.lng },
+      vehicle_plate: plate,
+      vehicle_location: { 
+        lat: currentLat, 
+        lng: currentLng,
+        last_update: lastUpdate,
+        source: vehicleData ? 'real-time' : 'route_history'
+      },
       destination: address,
       destination_coords: coords,
       ...etaStatus
