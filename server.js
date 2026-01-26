@@ -462,26 +462,15 @@ app.get('/api/trips/:tripId/eta', async (req, res) => {
     }
     
     let currentLat, currentLng, lastUpdate, dataAge;
-    
     if (vehicleData && vehicleData.Latitude && vehicleData.Longitude) {
       // Use real-time GPS data
       currentLat = vehicleData.Latitude;
       currentLng = vehicleData.Longitude;
       lastUpdate = vehicleData.LocTime || new Date().toISOString();
-      
-      // Check if GPS data is stale (older than 1 hour)
+      // Age is informational only
       const gpsTime = new Date(lastUpdate);
       const now = new Date();
       dataAge = Math.floor((now - gpsTime) / 1000 / 60); // minutes
-      
-      if (dataAge > 60) {
-        return res.status(400).json({ 
-          error: 'GPS data is too old',
-          last_update: lastUpdate,
-          age_minutes: dataAge,
-          message: 'Vehicle has not transmitted GPS data in over 1 hour. ETA cannot be calculated accurately.'
-        });
-      }
     } else {
       // Fallback to last known location from route history
       const routeData = tripMonitors[company].getRoutePoints(tripId);
@@ -492,20 +481,10 @@ app.get('/api/trips/:tripId/eta', async (req, res) => {
       currentLat = lastPoint.lat;
       currentLng = lastPoint.lng;
       lastUpdate = lastPoint.datetime;
-      
-      // Check age of route history data
+      // Age is informational only
       const gpsTime = new Date(lastUpdate);
       const now = new Date();
       dataAge = Math.floor((now - gpsTime) / 1000 / 60);
-      
-      if (dataAge > 60) {
-        return res.status(400).json({ 
-          error: 'GPS data is too old',
-          last_update: lastUpdate,
-          age_minutes: dataAge,
-          message: 'Vehicle has not transmitted GPS data in over 1 hour. ETA cannot be calculated accurately.'
-        });
-      }
     }
     
     // Get dropoff location
@@ -555,6 +534,7 @@ app.get('/api/trips/:tripId/eta', async (req, res) => {
         lat: currentLat, 
         lng: currentLng,
         last_update: lastUpdate,
+        age_minutes: dataAge,
         source: vehicleData ? 'real-time' : 'route_history'
       },
       destination: address,
