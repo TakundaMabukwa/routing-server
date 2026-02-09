@@ -1,8 +1,15 @@
 const express = require('express');
 const EPSRewardSystem = require('./eps-reward-system');
+const { createClient } = require('@supabase/supabase-js');
 
 const router = express.Router();
 const epsSystem = new EPSRewardSystem();
+
+// Supabase client
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_EPS_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY
+);
 
 // Get monthly driver statistics
 router.get('/driver/:driverName/monthly/:year/:month', async (req, res) => {
@@ -215,7 +222,7 @@ router.get('/leaderboard', async (req, res) => {
     const { limit = 20 } = req.query;
     
     // Get all drivers from Supabase
-    const { data: drivers, error } = await epsSystem.supabase
+    const { data: drivers, error } = await supabase
       .from('eps_driver_rewards')
       .select('*')
       .order('current_points', { ascending: false });
