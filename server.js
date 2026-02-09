@@ -133,7 +133,7 @@ if (process.env.CTRACK_USERNAME && process.env.CTRACK_PASSWORD) {
 
 // WebSocket connections per company
 const websockets = {
-  eps: new WebSocket(process.env.EPS_WEBSOCKET_URL),
+  eps: new WebSocket(process.env.EPS_WEBSOCKET_URL_2017_FEED),
   maysene: new WebSocket(process.env.MAYSENE_WEBSOCKET_URL)
 };
 

@@ -178,4 +178,129 @@ router.post('/test-violations/:driverName', async (req, res) => {
   }
 });
 
+// Manually trigger bi-weekly reset (for testing/admin)
+router.post('/biweekly-reset', async (req, res) => {
+  try {
+    await epsSystem.performBiweeklyReset();
+    res.json({ message: 'Bi-weekly reset completed successfully' });
+  } catch (error) {
+    console.error('Error triggering bi-weekly reset:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get bi-weekly distance for a driver
+router.get('/driver/:driverName/biweekly-distance', async (req, res) => {
+  try {
+    const { driverName } = req.params;
+    const distance = epsSystem.getBiWeeklyDistance(driverName);
+    
+    if (!distance) {
+      return res.status(404).json({ error: 'No bi-weekly distance data available' });
+    }
+    
+    res.json({
+      driver_name: driverName,
+      ...distance
+    });
+  } catch (error) {
+    console.error('Error getting bi-weekly distance:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get leaderboard with top speeders and rankings
+router.get('/leaderboard', async (req, res) => {
+  try {
+    const { limit = 20 } = req.query;
+    
+    // Get all drivers from Supabase
+    const { data: drivers, error } = await epsSystem.supabase
+      .from('eps_driver_rewards')
+      .select('*')
+      .order('current_points', { ascending: false });
+    
+    if (error) throw error;
+    
+    // Calculate rankings and stats
+    const leaderboard = drivers.map((driver, index) => {
+      const totalViolations = (driver.speed_violations_count || 0) + 
+                             (driver.harsh_braking_count || 0) + 
+                             (driver.night_driving_count || 0);
+      
+      const distance = driver.current_mileage && driver.starting_mileage 
+        ? driver.current_mileage - driver.starting_mileage 
+        : 0;
+      
+      return {
+        rank: index + 1,
+        driver_name: driver.driver_name,
+        current_points: driver.current_points,
+        points_deducted: driver.points_deducted,
+        current_level: driver.current_level,
+        speed_violations: driver.speed_violations_count || 0,
+        harsh_braking: driver.harsh_braking_count || 0,
+        night_driving: driver.night_driving_count || 0,
+        total_violations: totalViolations,
+        biweekly_distance_km: distance,
+        starting_mileage: driver.starting_mileage,
+        current_mileage: driver.current_mileage,
+        last_updated: driver.last_updated
+      };
+    });
+    
+    // Top speeders (most speed violations)
+    const topSpeeders = [...leaderboard]
+      .sort((a, b) => b.speed_violations - a.speed_violations)
+      .slice(0, parseInt(limit));
+    
+    // Top distance drivers
+    const topDistance = [...leaderboard]
+      .filter(d => d.biweekly_distance_km > 0)
+      .sort((a, b) => b.biweekly_distance_km - a.biweekly_distance_km)
+      .slice(0, parseInt(limit));
+    
+    // Best performers (highest points)
+    const bestPerformers = leaderboard.slice(0, parseInt(limit));
+    
+    // Worst performers (lowest points)
+    const worstPerformers = [...leaderboard]
+      .sort((a, b) => a.current_points - b.current_points)
+      .slice(0, parseInt(limit));
+    
+    // Fleet summary
+    const fleetSummary = {
+      total_drivers: drivers.length,
+      average_points: Math.round(drivers.reduce((sum, d) => sum + d.current_points, 0) / drivers.length),
+      total_violations: drivers.reduce((sum, d) => 
+        sum + (d.speed_violations_count || 0) + (d.harsh_braking_count || 0) + (d.night_driving_count || 0), 0),
+      total_speed_violations: drivers.reduce((sum, d) => sum + (d.speed_violations_count || 0), 0),
+      total_harsh_braking: drivers.reduce((sum, d) => sum + (d.harsh_braking_count || 0), 0),
+      total_night_driving: drivers.reduce((sum, d) => sum + (d.night_driving_count || 0), 0),
+      total_distance_km: drivers.reduce((sum, d) => {
+        const dist = d.current_mileage && d.starting_mileage ? d.current_mileage - d.starting_mileage : 0;
+        return sum + dist;
+      }, 0),
+      performance_levels: {
+        gold: drivers.filter(d => d.current_level === 'Gold').length,
+        silver: drivers.filter(d => d.current_level === 'Silver').length,
+        bronze: drivers.filter(d => d.current_level === 'Bronze').length,
+        critical: drivers.filter(d => d.current_level === 'Critical').length
+      }
+    };
+    
+    res.json({
+      fleet_summary: fleetSummary,
+      best_performers: bestPerformers,
+      worst_performers: worstPerformers,
+      top_speeders: topSpeeders,
+      top_distance: topDistance,
+      all_drivers: leaderboard
+    });
+  } catch (error) {
+    console.error('Error getting leaderboard:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 module.exports = router;

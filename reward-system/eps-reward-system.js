@@ -34,9 +34,13 @@ class EPSRewardSystem {
     this.lastSupabaseSync = 0;
     this.SUPABASE_SYNC_INTERVAL = 60 * 60 * 1000; // 1 hour
     
-    // Daily snapshot timer
-    this.setupDailySnapshot()
-    this.setupHourlySync()
+    // Bi-weekly reset (14 days)
+    this.BIWEEKLY_RESET_INTERVAL = 14 * 24 * 60 * 60 * 1000;
+    this.lastBiweeklyReset = this.getLastResetDate();
+    
+    // Setup timers
+    this.setupHourlySync();
+    this.setupBiweeklyReset();
   }
   
   // Initialize local SQLite database
@@ -56,11 +60,39 @@ class EPSRewardSystem {
         route_violations_count INTEGER,
         other_violations_count INTEGER,
         last_updated TEXT,
-        synced_to_supabase INTEGER DEFAULT 0
+        synced_to_supabase INTEGER DEFAULT 0,
+        starting_mileage INTEGER,
+        current_mileage INTEGER,
+        biweek_start_date TEXT
+      )
+    `);
+    
+    // Store last reset date
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS system_config (
+        key TEXT PRIMARY KEY,
+        value TEXT
       )
     `);
     
     console.log('📦 EPS Rewards local database initialized');
+  }
+
+  // Get last reset date from database
+  getLastResetDate() {
+    try {
+      const row = this.db.prepare('SELECT value FROM system_config WHERE key = ?').get('last_biweekly_reset');
+      return row ? new Date(row.value) : new Date();
+    } catch (error) {
+      return new Date();
+    }
+  }
+
+  // Save last reset date
+  saveLastResetDate(date) {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO system_config (key, value) VALUES (?, ?)
+    `).run('last_biweekly_reset', date.toISOString());
   }
 
   // Setup hourly Supabase sync
@@ -69,20 +101,57 @@ class EPSRewardSystem {
     console.log('⏰ Hourly Supabase sync enabled');
   }
 
-  // Setup daily snapshot at midnight
-  setupDailySnapshot() {
+  // Setup bi-weekly reset
+  setupBiweeklyReset() {
+    // Check if reset is needed on startup
     const now = new Date();
-    const tomorrow = new Date(now);
-    tomorrow.setDate(now.getDate() + 1);
-    tomorrow.setHours(0, 0, 0, 0);
+    const timeSinceReset = now - this.lastBiweeklyReset;
     
-    const msUntilMidnight = tomorrow.getTime() - now.getTime();
+    if (timeSinceReset >= this.BIWEEKLY_RESET_INTERVAL) {
+      console.log('🔄 Bi-weekly reset needed, executing now...');
+      this.performBiweeklyReset();
+    }
+    
+    // Schedule next reset
+    const msUntilNextReset = this.BIWEEKLY_RESET_INTERVAL - (timeSinceReset % this.BIWEEKLY_RESET_INTERVAL);
     
     setTimeout(() => {
-      this.createDailySnapshot();
-      // Set up recurring daily snapshots
-      setInterval(() => this.createDailySnapshot(), 24 * 60 * 60 * 1000);
-    }, msUntilMidnight);
+      this.performBiweeklyReset();
+      // Set up recurring resets
+      setInterval(() => this.performBiweeklyReset(), this.BIWEEKLY_RESET_INTERVAL);
+    }, msUntilNextReset);
+    
+    console.log(`⏰ Bi-weekly reset scheduled in ${Math.floor(msUntilNextReset / (24 * 60 * 60 * 1000))} days`);
+  }
+
+  // Perform bi-weekly reset
+  async performBiweeklyReset() {
+    try {
+      console.log('🔄 Starting bi-weekly reset...');
+      
+      // Clear in-memory state
+      this.driverStates.clear();
+      
+      // Clear local SQLite database
+      this.db.prepare('DELETE FROM driver_rewards').run();
+      
+      // Clear Supabase database
+      const { error } = await supabase
+        .from('eps_driver_rewards')
+        .delete()
+        .neq('driver_name', ''); // Delete all records
+      
+      if (error) throw error;
+      
+      // Update last reset date
+      const now = new Date();
+      this.lastBiweeklyReset = now;
+      this.saveLastResetDate(now);
+      
+      console.log('✅ Bi-weekly reset completed - all drivers reset to 100 points');
+    } catch (error) {
+      console.error('Error performing bi-weekly reset:', error);
+    }
   }
 
   // Calculate performance level based on remaining points
@@ -110,7 +179,7 @@ class EPSRewardSystem {
     return true;
   }
 
-  // Get local driver state (no database calls)
+  // Get or create local driver state (no database calls)
   getLocalDriverState(driverName) {
     const key = driverName.toLowerCase();
     if (!this.driverStates.has(key)) {
@@ -124,13 +193,20 @@ class EPSRewardSystem {
         night_driving_count: 0,
         route_violations_count: 0,
         other_violations_count: 0,
-        last_updated: new Date().toISOString()
+        last_updated: new Date().toISOString(),
+        starting_mileage: null,
+        current_mileage: null,
+        biweek_start_date: null,
+        daily_speed_count: 0,
+        daily_braking_count: 0,
+        daily_night_count: 0,
+        last_daily_reset: new Date().toISOString().split('T')[0]
       });
     }
     return this.driverStates.get(key);
   }
 
-  // Process EPS data and calculate rewards
+  // Process EPS data and calculate rewards (auto-creates drivers)
   async processEPSData(epsData) {
     try {
       const { Plate: plate, DriverName: driverName } = epsData;
@@ -144,13 +220,14 @@ class EPSRewardSystem {
         return null;
       }
 
+      // Auto-create driver if doesn't exist (upsert behavior)
+      const driverState = this.getLocalDriverState(driverName);
+      
       // Process violations in memory only
       const violations = this.processViolationsLocal(epsData);
       
-      // Only write to local database if there are violations
-      if (violations.length > 0) {
-        this.writeViolationsToLocalDB(driverName, violations);
-      }
+      // Always write to local database (creates or updates)
+      this.writeViolationsToLocalDB(driverName, violations);
 
       return { violations, isDriving: true };
     } catch (error) {
@@ -163,6 +240,7 @@ class EPSRewardSystem {
   isVehicleDriving(epsData) {
     const nameEvent = epsData.NameEvent ? epsData.NameEvent.toUpperCase() : '';
     const statuses = epsData.Statuses ? epsData.Statuses.toUpperCase() : '';
+    const status = epsData.Status ? epsData.Status.toUpperCase() : '';
     
     // Check for explicit stationary indicators first (these override everything)
     if (nameEvent.includes('IGNITION OFF') || 
@@ -176,7 +254,9 @@ class EPSRewardSystem {
         statuses.includes('PARKED') ||
         statuses.includes('IDLE') ||
         statuses.includes('STOPPED') ||
-        statuses.includes('OFF')) {
+        statuses.includes('OFF') ||
+        status.includes('STOPPED') ||
+        status.includes('PARKED')) {
       return false;
     }
     
@@ -204,56 +284,96 @@ class EPSRewardSystem {
   processViolationsLocal(epsData) {
     const violations = [];
     const driverName = epsData.DriverName;
+    const status = epsData.Status ? epsData.Status.toUpperCase() : '';
     
     // Get or create local driver state
     const driverState = this.getLocalDriverState(driverName);
     
-    // Speed violations
-    if (epsData.Speed > 120) {
+    // Check if we need to reset daily counts (new day)
+    const today = new Date().toISOString().split('T')[0];
+    if (driverState.last_daily_reset !== today) {
+      driverState.daily_speed_count = 0;
+      driverState.daily_braking_count = 0;
+      driverState.daily_night_count = 0;
+      driverState.last_daily_reset = today;
+    }
+    
+    // Track mileage for bi-weekly calculations
+    if (epsData.Mileage) {
+      const currentDate = new Date();
+      const biweekStart = driverState.biweek_start_date ? new Date(driverState.biweek_start_date) : null;
+      
+      // Initialize bi-week tracking if not set or if 2 weeks have passed
+      if (!biweekStart || (currentDate - biweekStart) > (14 * 24 * 60 * 60 * 1000)) {
+        driverState.starting_mileage = epsData.Mileage;
+        driverState.biweek_start_date = currentDate.toISOString();
+      }
+      driverState.current_mileage = epsData.Mileage;
+    }
+
+    // Speed violations - 4 free per day
+    if (status.includes('SAFETY - SPEEDING') || status.includes('SPEEDING') || epsData.Speed > 120) {
       driverState.speed_violations_count++;
-      if (driverState.speed_violations_count > this.VIOLATION_THRESHOLDS.SPEED) {
+      driverState.daily_speed_count++;
+      
+      if (driverState.daily_speed_count > this.VIOLATION_THRESHOLDS.SPEED) {
         driverState.current_points = Math.max(0, driverState.current_points - this.POINTS_PER_VIOLATION);
         driverState.points_deducted++;
       }
+      
       violations.push({
         type: 'speed_violation',
         category: 'SPEED',
         value: epsData.Speed,
+        status: epsData.Status,
         violation_count: driverState.speed_violations_count,
-        points_remaining: driverState.current_points
+        daily_count: driverState.daily_speed_count,
+        points_remaining: driverState.current_points,
+        penalty_applied: driverState.daily_speed_count > this.VIOLATION_THRESHOLDS.SPEED
       });
     }
 
-    // Harsh braking violations
-    if (epsData.NameEvent && epsData.NameEvent.toUpperCase().includes('HARSH BRAKING')) {
+    // Harsh braking violations - 4 free per day
+    if (status.includes('SAFETY - HARSH BRAKING') || status.includes('HARSH BRAKING')) {
       driverState.harsh_braking_count++;
-      if (driverState.harsh_braking_count > this.VIOLATION_THRESHOLDS.HARSH_BRAKING) {
+      driverState.daily_braking_count++;
+      
+      if (driverState.daily_braking_count > this.VIOLATION_THRESHOLDS.HARSH_BRAKING) {
         driverState.current_points = Math.max(0, driverState.current_points - this.POINTS_PER_VIOLATION);
         driverState.points_deducted++;
       }
+      
       violations.push({
         type: 'harsh_braking_violation',
         category: 'HARSH_BRAKING',
+        status: epsData.Status,
         violation_count: driverState.harsh_braking_count,
-        points_remaining: driverState.current_points
+        daily_count: driverState.daily_braking_count,
+        points_remaining: driverState.current_points,
+        penalty_applied: driverState.daily_braking_count > this.VIOLATION_THRESHOLDS.HARSH_BRAKING
       });
     }
 
-    // Night driving violations
+    // Night driving violations - 4 free per day
     const locTimeAdjusted = new Date(new Date(epsData.LocTime).getTime() + (this.serverTimeOffset * 60 * 60 * 1000));
     const hour = locTimeAdjusted.getHours();
     
     if (hour >= 22 || hour <= 5) {
       driverState.night_driving_count++;
-      if (driverState.night_driving_count > this.VIOLATION_THRESHOLDS.NIGHT_DRIVING) {
+      driverState.daily_night_count++;
+      
+      if (driverState.daily_night_count > this.VIOLATION_THRESHOLDS.NIGHT_DRIVING) {
         driverState.current_points = Math.max(0, driverState.current_points - this.POINTS_PER_VIOLATION);
         driverState.points_deducted++;
       }
+      
       violations.push({
         type: 'night_driving_violation',
         category: 'NIGHT_DRIVING',
         violation_count: driverState.night_driving_count,
-        points_remaining: driverState.current_points
+        daily_count: driverState.daily_night_count,
+        points_remaining: driverState.current_points,
+        penalty_applied: driverState.daily_night_count > this.VIOLATION_THRESHOLDS.NIGHT_DRIVING
       });
     }
 
@@ -263,29 +383,19 @@ class EPSRewardSystem {
     return violations;
   }
 
-  // Write violations to local SQLite only
+  // Write violations to local SQLite only (upsert - creates if not exists)
   writeViolationsToLocalDB(driverName, violations) {
     try {
       const driverState = this.getLocalDriverState(driverName);
       
-      // Check if data actually changed
-      const existing = this.db.prepare('SELECT * FROM driver_rewards WHERE driver_name = ?').get(driverName);
-      
-      if (existing && 
-          existing.current_points === driverState.current_points &&
-          existing.speed_violations_count === driverState.speed_violations_count &&
-          existing.harsh_braking_count === driverState.harsh_braking_count &&
-          existing.night_driving_count === driverState.night_driving_count) {
-        return; // No changes, skip write
-      }
-      
-      // Store in local SQLite database
+      // Always write to database (upsert behavior)
       this.db.prepare(`
         INSERT OR REPLACE INTO driver_rewards (
           driver_name, current_points, points_deducted, current_level,
           speed_violations_count, harsh_braking_count, night_driving_count,
-          route_violations_count, other_violations_count, last_updated, synced_to_supabase
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+          route_violations_count, other_violations_count, last_updated, synced_to_supabase,
+          starting_mileage, current_mileage, biweek_start_date
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
       `).run(
         driverName,
         driverState.current_points,
@@ -296,14 +406,33 @@ class EPSRewardSystem {
         driverState.night_driving_count,
         driverState.route_violations_count,
         driverState.other_violations_count,
-        new Date().toISOString()
+        new Date().toISOString(),
+        driverState.starting_mileage,
+        driverState.current_mileage,
+        driverState.biweek_start_date
       );
       
-      console.log(`📝 ${driverName}: ${violations.length} violations - Points: ${driverState.current_points} (local)`);
+      if (violations.length > 0) {
+        console.log(`📝 ${driverName}: ${violations.length} violations - Points: ${driverState.current_points}`);
+      }
       
     } catch (error) {
       console.error('Error writing to local database:', error);
     }
+  }
+
+  // Get bi-weekly distance for a driver
+  getBiWeeklyDistance(driverName) {
+    const driverState = this.getLocalDriverState(driverName);
+    if (!driverState.starting_mileage || !driverState.current_mileage) {
+      return null;
+    }
+    return {
+      starting_mileage: driverState.starting_mileage,
+      current_mileage: driverState.current_mileage,
+      distance_covered: driverState.current_mileage - driverState.starting_mileage,
+      biweek_start_date: driverState.biweek_start_date
+    };
   }
 
   // Sync all unsynced data to Supabase (hourly)
@@ -331,7 +460,10 @@ class EPSRewardSystem {
           night_driving_count: driver.night_driving_count,
           route_violations_count: driver.route_violations_count,
           other_violations_count: driver.other_violations_count,
-          last_updated: driver.last_updated
+          last_updated: driver.last_updated,
+          starting_mileage: driver.starting_mileage,
+          current_mileage: driver.current_mileage,
+          biweek_start_date: driver.biweek_start_date
         })), {
           onConflict: 'driver_name'
         });
@@ -393,48 +525,6 @@ class EPSRewardSystem {
     // In the new system, violations are written immediately to local DB
     // This method exists for compatibility but does nothing
     return Promise.resolve();
-  }
-
-  // Create daily snapshot of all driver data
-  async createDailySnapshot() {
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      
-      // Force sync to Supabase before snapshot
-      await this.syncToSupabase();
-      
-      // Get all current driver rewards from local DB
-      const drivers = this.db.prepare('SELECT * FROM driver_rewards').all();
-      
-      // Create snapshot for each driver
-      const snapshots = drivers.map(driver => ({
-        driver_name: driver.driver_name,
-        snapshot_date: today,
-        current_points: driver.current_points,
-        points_deducted: driver.points_deducted,
-        current_level: driver.current_level,
-        speed_violations: driver.speed_violations_count,
-        harsh_braking_violations: driver.harsh_braking_count,
-        night_driving_violations: driver.night_driving_count,
-        route_violations: driver.route_violations_count,
-        other_violations: driver.other_violations_count,
-        total_violations: (driver.speed_violations_count || 0) + 
-                         (driver.harsh_braking_count || 0) + 
-                         (driver.night_driving_count || 0) + 
-                         (driver.route_violations_count || 0) + 
-                         (driver.other_violations_count || 0)
-      }));
-      
-      // Store snapshots
-      const { error: insertError } = await supabase
-        .from('eps_daily_snapshots')
-        .insert(snapshots);
-      
-      if (insertError) throw insertError;
-      console.log(`📸 Daily snapshot created for ${snapshots.length} drivers`);
-    } catch (error) {
-      console.error('Error creating daily snapshot:', error);
-    }
   }
 }
 
