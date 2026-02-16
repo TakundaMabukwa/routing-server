@@ -36,13 +36,13 @@ class ETAMonitor {
     }
   }
 
-  async checkETA(vehicleLat, vehicleLng, destinationLat, destinationLng, deadline, vehicleLocTime = null) {
+  async checkETA(vehicleLat, vehicleLng, destinationLat, destinationLng, deadline = null, vehicleLocTime = null) {
     try {
       const cacheKey = `${vehicleLat},${vehicleLng}-${destinationLat},${destinationLng}`;
       const cached = this.etaCache.get(cacheKey);
       
       if (cached && Date.now() - cached.timestamp < this.CACHE_DURATION) {
-        return this.calculateStatus(cached.duration, deadline);
+        return this.calculateStatus(cached.duration, deadline, cached.distance, vehicleLocTime);
       }
 
       // Use Mapbox Directions API with traffic profile for maximum accuracy
@@ -78,7 +78,7 @@ class ETAMonitor {
     }
   }
 
-  calculateStatus(durationSeconds, deadline, distanceMeters = null, vehicleLocTime = null) {
+  calculateStatus(durationSeconds, deadline = null, distanceMeters = null, vehicleLocTime = null) {
     // Use vehicle loc_time if provided, otherwise use server time
     let now;
     if (vehicleLocTime) {
@@ -88,12 +88,26 @@ class ETAMonitor {
       now = new Date();
     }
     
+    const eta = new Date(now.getTime() + durationSeconds * 1000);
+    const hasDeadline = Boolean(deadline && !Number.isNaN(new Date(deadline).getTime()));
+
+    if (!hasDeadline) {
+      return {
+        will_arrive_on_time: null,
+        eta: eta.toISOString(),
+        deadline: null,
+        original_deadline: null,
+        duration_minutes: Math.round(durationSeconds / 60),
+        distance_km: distanceMeters ? (distanceMeters / 1000).toFixed(1) : null,
+        buffer_minutes: null,
+        status: 'eta_only'
+      };
+    }
+
     const deadlineTime = new Date(deadline);
-    
+
     // Add 2 hours to deadline for SAST timezone
     const adjustedDeadline = new Date(deadlineTime.getTime() + 2 * 60 * 60 * 1000);
-    
-    const eta = new Date(now.getTime() + durationSeconds * 1000);
     const timeRemaining = adjustedDeadline - now;
     const timeNeeded = durationSeconds * 1000;
     const buffer = timeRemaining - timeNeeded;

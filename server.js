@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const WebSocket = require('ws');
+const axios = require('axios');
 const EPSRewardSystem = require('./reward-system/eps-reward-system');
 const epsRoutes = require('./reward-system/eps-rewards');
 const mayseneRoutes = require('./reward-system/maysene-rewards');
@@ -19,6 +20,7 @@ const WS_PORT = process.env.WS_PORT || 3002;
 const path = require('path');
 const Database = require('better-sqlite3');
 const { WebSocketServer } = require('ws');
+const BACKUP_VEHICLES_ENDPOINT = process.env.TCP_BASE_URL || 'http://64.227.138.235:3000/api/maysene-vehicles';
 
 // Middleware
 app.use(express.json());
@@ -82,6 +84,67 @@ function saveCanBusData(company, plate, data) {
   const dataStr = JSON.stringify(data);
   const timestamp = data.timestamp;
   upsertStmts[company].run(plate, dataStr, timestamp, dataStr, timestamp);
+}
+
+function normalizePlate(value) {
+  return String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+function toNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getBackupVehicles(payload) {
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.vehicles)) return payload.vehicles;
+  if (Array.isArray(payload)) return payload;
+  return [];
+}
+
+function findBackupVehicleByPlate(vehicles, plate) {
+  const target = normalizePlate(plate);
+  if (!target) return null;
+
+  const exact = vehicles.find(v =>
+    normalizePlate(v?.plate || v?.Plate || v?.registration_number || v?.registrationNumber) === target
+  );
+  if (exact) return exact;
+
+  return vehicles.find(v => {
+    const candidate = normalizePlate(v?.plate || v?.Plate || v?.registration_number || v?.registrationNumber);
+    return candidate && (candidate.includes(target) || target.includes(candidate));
+  }) || null;
+}
+
+function toLocationFromBackupVehicle(vehicle) {
+  if (!vehicle) return null;
+
+  const latitude = toNumber(vehicle.latitude ?? vehicle.Latitude ?? vehicle.lat);
+  const longitude = toNumber(vehicle.longitude ?? vehicle.Longitude ?? vehicle.lng);
+
+  if (latitude === null || longitude === null) return null;
+
+  return {
+    Latitude: latitude,
+    Longitude: longitude,
+    Speed: toNumber(vehicle.speed ?? vehicle.Speed) ?? 0,
+    LocTime: vehicle.loc_time || vehicle.LocTime || vehicle.timestamp || new Date().toISOString()
+  };
+}
+
+async function fetchVehicleFromBackupApi(plate) {
+  try {
+    const response = await axios.get(BACKUP_VEHICLES_ENDPOINT, { timeout: 12000 });
+    const vehicles = getBackupVehicles(response.data);
+    const vehicle = findBackupVehicleByPlate(vehicles, plate);
+    return toLocationFromBackupVehicle(vehicle);
+  } catch (error) {
+    console.error('Error fetching from backup vehicles API:', error.message);
+    return null;
+  }
 }
 
 // Initialize EPS Reward System
@@ -436,28 +499,16 @@ app.get('/api/trips/:tripId/eta', async (req, res) => {
       return res.status(404).json({ error: 'No vehicle assigned to trip' });
     }
     
-    // Get real-time vehicle location from telematics cache or TCP API
+    // Get real-time vehicle location from cache, then backup API
     const vehicleKey = `${company}:${plate}`;
     let vehicleData = vehicleDataCache.get(vehicleKey);
-    
-    // If not in cache, fetch from TCP API for Maysene
-    if ((!vehicleData || !vehicleData.Latitude || !vehicleData.Longitude) && company === 'maysene') {
-      try {
-        const tcpUrl = process.env.TCP_BASE_URL || 'http://64.227.138.235:3000/api/maysene-vehicles';
-        const response = await axios.get(tcpUrl);
-        const vehicles = response.data.data || [];
-        const vehicle = vehicles.find(v => v.plate === plate);
-        
-        if (vehicle && vehicle.latitude && vehicle.longitude) {
-          vehicleData = {
-            Latitude: parseFloat(vehicle.latitude),
-            Longitude: parseFloat(vehicle.longitude),
-            Speed: parseFloat(vehicle.speed || 0),
-            LocTime: vehicle.loc_time
-          };
-        }
-      } catch (error) {
-        console.error('Error fetching from TCP API:', error.message);
+    let locationSource = 'real-time';
+
+    if (!vehicleData || !vehicleData.Latitude || !vehicleData.Longitude) {
+      const backupLocation = await fetchVehicleFromBackupApi(plate);
+      if (backupLocation) {
+        vehicleData = backupLocation;
+        locationSource = 'backup_api';
       }
     }
     
@@ -485,6 +536,7 @@ app.get('/api/trips/:tripId/eta', async (req, res) => {
       const gpsTime = new Date(lastUpdate);
       const now = new Date();
       dataAge = Math.floor((now - gpsTime) / 1000 / 60);
+      locationSource = 'route_history';
     }
     
     // Get dropoff location
@@ -507,11 +559,8 @@ app.get('/api/trips/:tripId/eta', async (req, res) => {
       return res.status(500).json({ error: 'Failed to geocode dropoff address' });
     }
     
-    // Get deadline
-    const deadline = trip.enddate || dropoff.delivery_date || dropoff.scheduled_time;
-    if (!deadline) {
-      return res.status(404).json({ error: 'No delivery deadline configured' });
-    }
+    // Deadline is optional; ETA can still be calculated from live location -> destination
+    const deadline = trip.enddate || dropoff.delivery_date || dropoff.scheduled_time || null;
     
     // Calculate ETA using Mapbox Directions API with real-time traffic
     const etaStatus = await tripMonitors[company].etaMonitor.checkETA(
@@ -535,7 +584,7 @@ app.get('/api/trips/:tripId/eta', async (req, res) => {
         lng: currentLng,
         last_update: lastUpdate,
         age_minutes: dataAge,
-        source: vehicleData ? 'real-time' : 'route_history'
+        source: locationSource
       },
       destination: address,
       destination_coords: coords,
