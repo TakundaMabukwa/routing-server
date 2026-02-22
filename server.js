@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const WebSocket = require('ws');
 const axios = require('axios');
-const EPSRewardSystem = require('./reward-system/eps-reward-system');
+const rewardSystem = require('./reward-system/eps-reward-system-singleton');
 const epsRoutes = require('./reward-system/eps-rewards');
 const mayseneRoutes = require('./reward-system/maysene-rewards');
 const statsRoutes = require('./reward-system/stats-routes');
@@ -146,9 +146,6 @@ async function fetchVehicleFromBackupApi(plate) {
     return null;
   }
 }
-
-// Initialize EPS Reward System
-const rewardSystem = new EPSRewardSystem();
 
 // Initialize Maysene Reward System
 const MayseneRewardSystem = require('./reward-system/maysene-reward-system');

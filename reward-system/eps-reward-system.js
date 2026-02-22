@@ -746,7 +746,20 @@ class EPSRewardSystem {
         .select('id, driver_name, plate, session_start_time, start_mileage, current_mileage, updated_at')
         .single();
 
-      if (error) throw error;
+      if (error) {
+        const isDuplicateOpenSession = error.code === '23505';
+        if (!isDuplicateOpenSession) {
+          throw error;
+        }
+
+        const existingOpen = await this.fetchOpenEngineSession(driverName, plate);
+        if (existingOpen) {
+          this.engineSessions.set(sessionKey, this.toSessionCache(existingOpen));
+          return;
+        }
+
+        throw error;
+      }
 
       this.engineSessions.set(sessionKey, this.toSessionCache(data));
       return;

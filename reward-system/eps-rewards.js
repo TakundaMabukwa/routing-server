@@ -1,9 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
-const EPSRewardSystem = require('./eps-reward-system');
-
-const rewardSystem = new EPSRewardSystem();
+const rewardSystem = require('./eps-reward-system-singleton');
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY

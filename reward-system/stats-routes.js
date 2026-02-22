@@ -1,9 +1,8 @@
 const express = require('express');
-const EPSRewardSystem = require('./eps-reward-system');
 const { createClient } = require('@supabase/supabase-js');
 
 const router = express.Router();
-const epsSystem = new EPSRewardSystem();
+const epsSystem = require('./eps-reward-system-singleton');
 
 // Supabase client
 const supabase = createClient(
