@@ -226,7 +226,8 @@ class EPSRewardSystem {
         daily_speed_count: 0,
         daily_braking_count: 0,
         daily_night_count: 0,
-        last_daily_reset: new Date().toISOString().split('T')[0]
+        last_daily_reset: new Date().toISOString().split('T')[0],
+        excessive_session_penalized_id: null
       });
     }
     return this.driverStates.get(key);
@@ -263,7 +264,8 @@ class EPSRewardSystem {
       daily_speed_count: 0,
       daily_braking_count: 0,
       daily_night_count: 0,
-      last_daily_reset: today
+      last_daily_reset: today,
+      excessive_session_penalized_id: null
     });
   }
 
@@ -672,11 +674,13 @@ class EPSRewardSystem {
     const currentMileage = this.parseNumericValue(session.current_mileage);
     const fallbackMileage = startMileage ?? currentMileage ?? 0;
     const updatedAt = session.updated_at ? new Date(session.updated_at).getTime() : Date.now();
+    const startTimeMs = session.session_start_time ? new Date(session.session_start_time).getTime() : NaN;
 
     return {
       id: session.id,
       driverName: session.driver_name,
       plate: session.plate,
+      startTime: Number.isFinite(startTimeMs) ? startTimeMs : Date.now(),
       startMileage: startMileage ?? fallbackMileage,
       currentMileage: currentMileage ?? fallbackMileage,
       lastPersistedMileage: currentMileage ?? fallbackMileage,
@@ -943,6 +947,11 @@ class EPSRewardSystem {
     const violations = [];
     const driverName = epsData.DriverName;
     const status = epsData.Status ? epsData.Status.toUpperCase() : '';
+    const statuses = epsData.Statuses ? epsData.Statuses.toUpperCase() : '';
+    const nameEvent = epsData.NameEvent ? epsData.NameEvent.toUpperCase() : '';
+    const eventText = `${status} | ${statuses} | ${nameEvent}`;
+    const hasEventToken = (tokens) => tokens.some(token => eventText.includes(token));
+    let penaltyAppliedThisMessage = false;
     
     // Get or create local driver state
     const driverState = this.getLocalDriverState(driverName);
@@ -969,14 +978,23 @@ class EPSRewardSystem {
       driverState.current_mileage = epsData.Mileage;
     }
 
-    // Speed violations - 4 free per day
-    if (status.includes('SAFETY - SPEEDING') || status.includes('SPEEDING') || epsData.Speed > 120) {
+    // Speed violations: only when explicit safety/speeding event messages are present
+    const isSpeedingMessage = hasEventToken([
+      'SAFETY - SPEEDING',
+      'SAFETY-SPEEDING',
+      'SPEEDING'
+    ]);
+    if (isSpeedingMessage) {
       driverState.speed_violations_count++;
       driverState.daily_speed_count++;
-      
-      if (driverState.daily_speed_count > this.VIOLATION_THRESHOLDS.SPEED) {
+
+      const speedThresholdExceeded = driverState.daily_speed_count > this.VIOLATION_THRESHOLDS.SPEED;
+      let speedPenaltyApplied = false;
+      if (speedThresholdExceeded && !penaltyAppliedThisMessage) {
         driverState.current_points = Math.max(0, driverState.current_points - this.POINTS_PER_VIOLATION);
         driverState.points_deducted++;
+        penaltyAppliedThisMessage = true;
+        speedPenaltyApplied = true;
       }
       
       violations.push({
@@ -987,18 +1005,27 @@ class EPSRewardSystem {
         violation_count: driverState.speed_violations_count,
         daily_count: driverState.daily_speed_count,
         points_remaining: driverState.current_points,
-        penalty_applied: driverState.daily_speed_count > this.VIOLATION_THRESHOLDS.SPEED
+        penalty_applied: speedPenaltyApplied
       });
     }
 
-    // Harsh braking violations - 4 free per day
-    if (status.includes('SAFETY - HARSH BRAKING') || status.includes('HARSH BRAKING')) {
+    // Harsh braking violations: only when explicit safety event messages are present
+    const isHarshBrakingMessage = hasEventToken([
+      'SAFETY - HARSH BRAKING',
+      'SAFETY-HARSH BRAKING',
+      'HARSH BRAKING'
+    ]);
+    if (isHarshBrakingMessage) {
       driverState.harsh_braking_count++;
       driverState.daily_braking_count++;
-      
-      if (driverState.daily_braking_count > this.VIOLATION_THRESHOLDS.HARSH_BRAKING) {
+
+      const brakingThresholdExceeded = driverState.daily_braking_count > this.VIOLATION_THRESHOLDS.HARSH_BRAKING;
+      let brakingPenaltyApplied = false;
+      if (brakingThresholdExceeded && !penaltyAppliedThisMessage) {
         driverState.current_points = Math.max(0, driverState.current_points - this.POINTS_PER_VIOLATION);
         driverState.points_deducted++;
+        penaltyAppliedThisMessage = true;
+        brakingPenaltyApplied = true;
       }
       
       violations.push({
@@ -1008,21 +1035,28 @@ class EPSRewardSystem {
         violation_count: driverState.harsh_braking_count,
         daily_count: driverState.daily_braking_count,
         points_remaining: driverState.current_points,
-        penalty_applied: driverState.daily_braking_count > this.VIOLATION_THRESHOLDS.HARSH_BRAKING
+        penalty_applied: brakingPenaltyApplied
       });
     }
 
-    // Night driving violations - 4 free per day
-    const locTimeAdjusted = new Date(new Date(epsData.LocTime).getTime() + (this.serverTimeOffset * 60 * 60 * 1000));
-    const hour = locTimeAdjusted.getHours();
-    
-    if (hour >= 22 || hour <= 5) {
+    // Night driving violations: only when explicit night-driving event messages are present
+    const isNightDrivingMessage = hasEventToken([
+      'SAFETY - NIGHT DRIVING',
+      'SAFETY-NIGHT DRIVING',
+      'EXCESSIVE NIGHT DRIVING',
+      'NIGHT DRIVING'
+    ]);
+    if (isNightDrivingMessage) {
       driverState.night_driving_count++;
       driverState.daily_night_count++;
-      
-      if (driverState.daily_night_count > this.VIOLATION_THRESHOLDS.NIGHT_DRIVING) {
+
+      const nightThresholdExceeded = driverState.daily_night_count > this.VIOLATION_THRESHOLDS.NIGHT_DRIVING;
+      let nightPenaltyApplied = false;
+      if (nightThresholdExceeded && !penaltyAppliedThisMessage) {
         driverState.current_points = Math.max(0, driverState.current_points - this.POINTS_PER_VIOLATION);
         driverState.points_deducted++;
+        penaltyAppliedThisMessage = true;
+        nightPenaltyApplied = true;
       }
       
       violations.push({
@@ -1031,8 +1065,46 @@ class EPSRewardSystem {
         violation_count: driverState.night_driving_count,
         daily_count: driverState.daily_night_count,
         points_remaining: driverState.current_points,
-        penalty_applied: driverState.daily_night_count > this.VIOLATION_THRESHOLDS.NIGHT_DRIVING
+        penalty_applied: nightPenaltyApplied
       });
+    }
+
+    // Excessive driving: engine/session kept ON for over 2 hours without OFF.
+    const engineState = this.getEngineState(epsData);
+    if (engineState === 'ON') {
+      const sessionKey = driverName.toLowerCase();
+      const activeSession = this.engineSessions.get(sessionKey);
+      if (activeSession && activeSession.id) {
+        const eventTimeIso = this.normalizeTimestamp(epsData.LocTime);
+        const eventTimeMs = new Date(eventTimeIso).getTime();
+        const sessionStartMs = Number(activeSession.startTime);
+        const durationMs = eventTimeMs - sessionStartMs;
+        const durationMinutes = Math.max(0, Math.floor(durationMs / (60 * 1000)));
+        const alreadyPenalizedThisSession =
+          String(driverState.excessive_session_penalized_id || '') === String(activeSession.id);
+        const exceededTwoHours = durationMs >= (2 * 60 * 60 * 1000);
+
+        if (exceededTwoHours && !alreadyPenalizedThisSession) {
+          let excessivePenaltyApplied = false;
+          if (!penaltyAppliedThisMessage) {
+            driverState.current_points = Math.max(0, driverState.current_points - this.POINTS_PER_VIOLATION);
+            driverState.points_deducted++;
+            driverState.other_violations_count++;
+            penaltyAppliedThisMessage = true;
+            excessivePenaltyApplied = true;
+          }
+
+          driverState.excessive_session_penalized_id = activeSession.id;
+          violations.push({
+            type: 'excessive_driving_violation',
+            category: 'OTHER',
+            session_id: activeSession.id,
+            duration_minutes: durationMinutes,
+            points_remaining: driverState.current_points,
+            penalty_applied: excessivePenaltyApplied
+          });
+        }
+      }
     }
 
     // Update driver level
