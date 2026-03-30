@@ -82,7 +82,7 @@ class TripMonitor {
     try {
       const { data: trips } = await this.supabase
         .from('trips')
-        .select('id, vehicleassignments, status, selectedstoppoints')
+        .select('id, vehicleassignments, handed_vehicleassignments, status, selectedstoppoints, accepted_at, actual_start_time, actual_end_time, fuel_breakdown')
         .not('status', 'in', '(Completed,Delivered)');
       
       console.log(`🔍 DEBUG: Query returned ${trips ? trips.length : 0} trips`);
@@ -138,7 +138,7 @@ class TripMonitor {
 
       console.log(`🚛 TRACKING: ${driverName} (${plate}) - Trip ${activeTrip.id} at ${lat},${lon} (${speed}km/h)`);
       
-      await this.updateTripLocation(activeTrip.id, lat, lon, speed, mileage);
+      await this.updateTripLocation(activeTrip, vehicleData);
       await this.checkCustomerProximity(activeTrip, lat, lon);
       
       let isAtBorder = false;
@@ -155,9 +155,79 @@ class TripMonitor {
     }
   }
 
+  getAllAssignments(trip) {
+    const parseAssignments = (value) => {
+      if (!value) return [];
+      let assignments = value;
+      if (typeof assignments === 'string') {
+        assignments = JSON.parse(assignments);
+      }
+      if (!Array.isArray(assignments)) {
+        assignments = [assignments];
+      }
+      return assignments.filter(Boolean);
+    };
+
+    return [
+      ...parseAssignments(trip.vehicleassignments),
+      ...parseAssignments(trip.handed_vehicleassignments)
+    ];
+  }
+
+  getDriverNamesFromAssignments(trip) {
+    const names = [];
+
+    try {
+      for (const assignment of this.getAllAssignments(trip)) {
+        const drivers = Array.isArray(assignment.drivers) ? assignment.drivers : [assignment.drivers].filter(Boolean);
+        for (const driver of drivers) {
+          const nameOptions = [driver?.surname, driver?.name, driver?.first_name].filter(Boolean);
+          for (const nameOption of nameOptions) {
+            const cleanName = String(nameOption).trim().replace(/^null\s+/i, '').replace(/\s+/g, ' ').trim();
+            if (cleanName && cleanName.toLowerCase() !== 'null') {
+              names.push(cleanName);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('âŒ Error parsing driver names:', error.message);
+    }
+
+    return [...new Set(names)];
+  }
+
+  getVehiclePlatesFromAssignments(trip) {
+    const plates = [];
+
+    try {
+      for (const assignment of this.getAllAssignments(trip)) {
+        const plateValue =
+          assignment?.vehicle?.registration_number ||
+          assignment?.vehicle?.plate ||
+          assignment?.vehicle?.name;
+        if (plateValue) {
+          plates.push(String(plateValue).trim());
+        }
+      }
+    } catch (error) {
+      console.error('âŒ Error parsing vehicle plates:', error.message);
+    }
+
+    return [...new Set(plates)];
+  }
+
+  normalizePlate(value) {
+    return String(value || '')
+      .trim()
+      .replace(/\s+/g, '')
+      .replace(/[^a-z0-9]/gi, '')
+      .toLowerCase();
+  }
+
   async findActiveTrip(driverName, plate) {
     const normalizedDriverName = driverName.toLowerCase();
-    const normalizedPlate = plate ? plate.toLowerCase() : null;
+    const normalizedPlate = this.normalizePlate(plate);
     
     // Check cache - prioritize plate
     if (normalizedPlate) {
@@ -174,12 +244,12 @@ class TripMonitor {
     
     // Search - prioritize plate match
     for (const [tripId, trip] of this.activeTrips) {
-      const tripPlate = this.getVehiclePlateFromAssignments(trip);
-      const plateMatch = tripPlate && plate && tripPlate.toLowerCase() === plate.toLowerCase();
+      const tripPlates = this.getVehiclePlatesFromAssignments(trip);
+      const matchedTripPlate = tripPlates.find((tripPlate) => this.normalizePlate(tripPlate) === normalizedPlate);
       
-      if (plateMatch) {
+      if (normalizedPlate && matchedTripPlate) {
         this.matchedVehicles.set(normalizedPlate, tripId);
-        console.log(`✅ VEHICLE MATCH: Trip ${tripId} - ${plate} <-> ${tripPlate}`);
+        console.log(`✅ VEHICLE MATCH: Trip ${tripId} - ${plate} <-> ${matchedTripPlate}`);
         return trip;
       }
     }
@@ -203,8 +273,8 @@ class TripMonitor {
       console.log(`❌ NO MATCH: Driver "${driverName}" OR Plate "${plate || 'N/A'}" (either can match):`);
       for (const [tripId, trip] of this.activeTrips) {
         const tripDriver = this.getDriverNameFromAssignments(trip);
-        const tripPlate = this.getVehiclePlateFromAssignments(trip);
-        console.log(`   Trip ${tripId}: Driver="${tripDriver || 'N/A'}" Plate="${tripPlate || 'N/A'}"`);
+        const tripPlates = this.getVehiclePlatesFromAssignments(trip);
+        console.log(`   Trip ${tripId}: Driver="${tripDriver || 'N/A'}" Plate="${tripPlates.join(', ') || 'N/A'}"`);
       }
     }
     
@@ -212,73 +282,11 @@ class TripMonitor {
   }
 
   getDriverNameFromAssignments(trip) {
-    if (!trip.vehicleassignments) return null;
-    
-    try {
-      let assignments = trip.vehicleassignments;
-      if (typeof assignments === 'string') {
-        assignments = JSON.parse(assignments);
-      }
-      
-      if (!Array.isArray(assignments)) {
-        assignments = [assignments];
-      }
-      
-      for (const assignment of assignments) {
-        if (!assignment.drivers) continue;
-        
-        const drivers = Array.isArray(assignment.drivers) 
-          ? assignment.drivers 
-          : [assignment.drivers];
-        
-        for (const driver of drivers) {
-          const nameOptions = [driver.surname, driver.name, driver.first_name].filter(Boolean);
-          
-          for (const nameOption of nameOptions) {
-            if (nameOption && nameOption.trim()) {
-              let cleanName = nameOption.trim()
-                .replace(/^null\s+/i, '')
-                .replace(/\s+/g, ' ')
-                .trim();
-              
-              if (cleanName && cleanName.toLowerCase() !== 'null') {
-                return cleanName;
-              }
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('❌ Error parsing vehicleassignments:', error.message);
-    }
-    
-    return null;
+    return this.getDriverNamesFromAssignments(trip)[0] || null;
   }
 
   getVehiclePlateFromAssignments(trip) {
-    if (!trip.vehicleassignments) return null;
-    
-    try {
-      let assignments = trip.vehicleassignments;
-      if (typeof assignments === 'string') {
-        assignments = JSON.parse(assignments);
-      }
-      
-      if (!Array.isArray(assignments)) {
-        assignments = [assignments];
-      }
-      
-      for (const assignment of assignments) {
-        if (assignment.vehicle && (assignment.vehicle.plate || assignment.vehicle.name)) {
-          const plateValue = assignment.vehicle.plate || assignment.vehicle.name;
-          return plateValue.trim();
-        }
-      }
-    } catch (error) {
-      console.error('❌ Error parsing vehicleassignments for plate:', error.message);
-    }
-    
-    return null;
+    return this.getVehiclePlatesFromAssignments(trip)[0] || null;
   }
 
   namesMatch(epsDriverName, tripDriverName) {
@@ -287,19 +295,34 @@ class TripMonitor {
     return eps.includes(trip) || trip.includes(eps);
   }
 
-  async updateTripLocation(tripId, latitude, longitude, speed, mileage) {
+  async updateTripLocation(trip, vehicleData) {
     try {
+      const tripId = trip?.id;
+      if (!tripId) return;
+
+      const latitude = parseFloat(vehicleData?.Latitude);
+      const longitude = parseFloat(vehicleData?.Longitude);
+      const speed = parseFloat(vehicleData?.Speed || 0);
+      const mileage = vehicleData?.Mileage !== undefined && vehicleData?.Mileage !== null
+        ? parseFloat(vehicleData.Mileage)
+        : null;
+
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        return;
+      }
+
       const now = Date.now();
       const newPoint = {
         lat: latitude,
         lng: longitude,
         speed: speed,
         timestamp: Math.floor(now / 1000),
-        datetime: new Date().toISOString()
+        datetime: new Date().toISOString(),
+        plate: vehicleData?.Plate || null
       };
-      
+
       const existing = this.db.prepare('SELECT route_points FROM trip_routes WHERE trip_id = ?').get(tripId);
-      
+
       if (existing) {
         const points = JSON.parse(existing.route_points);
         points.push(newPoint);
@@ -309,33 +332,33 @@ class TripMonitor {
         this.db.prepare('INSERT INTO trip_routes (trip_id, company, route_points, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
           .run(tripId, this.company, JSON.stringify([newPoint]), new Date().toISOString(), new Date().toISOString());
       }
-      
-      if (mileage) {
-        const { data: trip } = await this.supabase
+
+      if (Number.isFinite(mileage)) {
+        const { data: tripRow } = await this.supabase
           .from('trips')
           .select('start_mileage')
           .eq('id', tripId)
           .single();
-        
+
         const updateData = {};
-        
-        if (!trip?.start_mileage) {
+
+        if (!tripRow?.start_mileage) {
           updateData.start_mileage = mileage;
         }
         updateData.end_mileage = mileage;
-        
-        if (trip?.start_mileage) {
-          updateData.total_distance = mileage - trip.start_mileage;
+
+        if (tripRow?.start_mileage) {
+          updateData.total_distance = mileage - tripRow.start_mileage;
         }
-        
+
         await this.supabase
           .from('trips')
           .update(updateData)
           .eq('id', tripId);
       }
-      
+
     } catch (error) {
-      console.error('❌ Error updating trip location:', error.message);
+      console.error('Error updating trip location:', error.message);
     }
   }
 

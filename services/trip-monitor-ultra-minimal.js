@@ -9,14 +9,24 @@ const ETAMonitor = require('./eta-monitor');
 class TripMonitorUltraMinimal {
   constructor(company = 'eps') {
     this.company = company;
-    const supabaseUrl = company === 'maysene' 
+    const isMaysene = company === 'maysene';
+    const isWaterford = company === 'waterford';
+    const supabaseUrl = isMaysene
       ? process.env.NEXT_PUBLIC_MAYSENE_SUPABASE_URL
-      : process.env.NEXT_PUBLIC_EPS_SUPABASE_URL;
-    const supabaseKey = company === 'maysene'
+      : isWaterford
+        ? process.env.NEXT_PUBLIC_WATERFORD_SUPABASE_URL || process.env.NEXT_PUBLIC_EPS_SUPABASE_URL
+        : process.env.NEXT_PUBLIC_EPS_SUPABASE_URL;
+    const supabaseKey = isMaysene
       ? process.env.NEXT_PUBLIC_MAYSENE_SUPABASE_ANON_KEY
-      : process.env.NEXT_PUBLIC_EPS_SUPABASE_ANON_KEY;
+      : isWaterford
+        ? process.env.NEXT_PUBLIC_WATERFORD_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_EPS_SUPABASE_ANON_KEY
+        : process.env.NEXT_PUBLIC_EPS_SUPABASE_ANON_KEY;
     
     this.supabase = createClient(supabaseUrl, supabaseKey);
+    this.fuelSupabase = createClient(
+      process.env.WATERFORD_FUEL_SUPABASE_URL || process.env.SUPABASE_URL || supabaseUrl,
+      process.env.WATERFORD_FUEL_SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || supabaseKey
+    );
     this.activeTrips = new Map();
     this.stationaryDrivers = new Map();
     this.matchedDrivers = new Map();
@@ -29,6 +39,9 @@ class TripMonitorUltraMinimal {
     this.etaCheckInterval = 30 * 60 * 1000; // Check ETA every 30 minutes
     this.lastETACheck = new Map();
     this.lastETAUpdate = new Map(); // Track last Supabase update
+    this.tripFuelCache = new Map();
+    this.tripFuelSyncTimes = new Map();
+    this.unsupportedTripColumns = new Set();
     
     // Debounce tracking for Supabase writes
     this.lastSupabaseWrite = new Map();
@@ -58,8 +71,12 @@ class TripMonitorUltraMinimal {
       CREATE TABLE IF NOT EXISTS trips_cache (
         id INTEGER PRIMARY KEY,
         vehicleassignments TEXT,
+        handed_vehicleassignments TEXT,
         selectedstoppoints TEXT,
         status TEXT,
+        accepted_at TEXT,
+        actual_start_time TEXT,
+        actual_end_time TEXT,
         loaded_at TEXT
       );
       
@@ -80,7 +97,20 @@ class TripMonitorUltraMinimal {
         synced_to_supabase INTEGER DEFAULT 0
       );
     `);
-    console.log('📦 Ultra-minimal trip monitor initialized');
+
+    const tripsCacheColumns = this.db.prepare("PRAGMA table_info(trips_cache)").all();
+    const existingTripsCacheColumns = new Set(tripsCacheColumns.map((column) => column.name));
+    const ensureTripsCacheColumn = (name, definition) => {
+      if (!existingTripsCacheColumns.has(name)) {
+        this.db.exec(`ALTER TABLE trips_cache ADD COLUMN ${name} ${definition}`);
+      }
+    };
+
+    ensureTripsCacheColumn('handed_vehicleassignments', 'TEXT');
+    ensureTripsCacheColumn('accepted_at', 'TEXT');
+    ensureTripsCacheColumn('actual_start_time', 'TEXT');
+    ensureTripsCacheColumn('actual_end_time', 'TEXT');
+    console.log('?? Ultra-minimal trip monitor initialized');
   }
 
   setupRealtimeForNewTrips() {
@@ -101,16 +131,26 @@ class TripMonitorUltraMinimal {
     try {
       const { data: trips } = await this.supabase
         .from('trips')
-        .select('id, vehicleassignments, status, selectedstoppoints, destination_coordinates, enddate')
-        .not('status', 'in', '(Completed,Delivered,Cancelled)');
+        .select('id, created_at, vehicleassignments, handed_vehicleassignments, status, selectedstoppoints, destination_coordinates, enddate, accepted_at, actual_start_time, actual_end_time, start_mileage, end_mileage, total_distance, late_acceptance, late_arrival, alert_message, current_latitude, current_longitude, current_speed, last_location_update')
+        .not('status', 'in', '(Completed,Delivered,Cancelled,completed,delivered,cancelled)');
       
       if (!trips) return;
       
-      const stmt = this.db.prepare('INSERT OR REPLACE INTO trips_cache (id, vehicleassignments, selectedstoppoints, status, loaded_at) VALUES (?, ?, ?, ?, ?)');
+      const stmt = this.db.prepare('INSERT OR REPLACE INTO trips_cache (id, vehicleassignments, handed_vehicleassignments, selectedstoppoints, status, accepted_at, actual_start_time, actual_end_time, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
       const now = new Date().toISOString();
       
       for (const trip of trips) {
-        stmt.run(trip.id, JSON.stringify(trip.vehicleassignments), JSON.stringify(trip.selectedstoppoints), trip.status, now);
+        stmt.run(
+          trip.id,
+          JSON.stringify(trip.vehicleassignments),
+          JSON.stringify(trip.handed_vehicleassignments),
+          JSON.stringify(trip.selectedstoppoints),
+          trip.status,
+          trip.accepted_at || null,
+          trip.actual_start_time || null,
+          trip.actual_end_time || null,
+          now
+        );
         this.activeTrips.set(trip.id, trip);
         
         if (trip.selectedstoppoints?.length > 0) {
@@ -164,30 +204,58 @@ class TripMonitorUltraMinimal {
     console.log(`📍 Cached locations for ${trips.length} trips`);
   }
 
-  async processVehicleData(vehicleData) {
+  async processVehicleData(vehicleData, borderMonitor = null) {
     try {
       const { DriverName: driverName, Plate: plate, Latitude: lat, Longitude: lon, Speed: speed } = vehicleData;
       
-      if (!driverName || !lat || !lon || (lat === 0 && lon === 0)) return;
+      if (!plate || !lat || !lon || (lat === 0 && lon === 0)) return;
 
       const activeTrip = this.findActiveTrip(driverName, plate);
       if (!activeTrip) return;
+      console.log(`[${this.company.toUpperCase()}] Matched ${plate} to trip ${activeTrip.id}`);
 
-      this.updateTripLocationLocal(activeTrip.id, lat, lon, speed);
+      await this.updateTripMonitoringData(activeTrip, vehicleData);
       await this.checkETAStatus(activeTrip, lat, lon, plate);
       await this.checkDestinationProximity(activeTrip, lat, lon);
       await this.checkHighRiskZone(activeTrip, vehicleData);
       await this.checkTollGate(activeTrip, vehicleData);
-      await this.checkForStops(activeTrip, lat, lon, speed, vehicleData);
+      
+      let isAtBorder = false;
+      if (borderMonitor) {
+        isAtBorder = await borderMonitor.checkVehicleLocation(vehicleData, activeTrip.id);
+      }
+      
+      if (!isAtBorder) {
+        await this.checkForStops(activeTrip, lat, lon, speed, vehicleData);
+      }
+      
+      return activeTrip.id;
       
     } catch (error) {
       console.error('❌ Error processing vehicle data:', error.message);
     }
+
+    return null;
+  }
+
+  getAllAssignments(trip) {
+    const parseAssignments = (value) => {
+      if (!value) return [];
+      let assignments = value;
+      if (typeof assignments === 'string') assignments = JSON.parse(assignments);
+      if (!Array.isArray(assignments)) assignments = [assignments];
+      return assignments.filter(Boolean);
+    };
+
+    return [
+      ...parseAssignments(trip.vehicleassignments),
+      ...parseAssignments(trip.handed_vehicleassignments)
+    ];
   }
 
   findActiveTrip(driverName, plate) {
-    const normalizedDriverName = driverName.toLowerCase();
-    const normalizedPlate = plate ? plate.toLowerCase() : null;
+    const normalizedDriverName = String(driverName || '').trim().toLowerCase();
+    const normalizedPlate = this.normalizePlate(plate);
     
     if (normalizedPlate) {
       const cachedByVehicle = this.matchedVehicles.get(normalizedPlate);
@@ -196,14 +264,15 @@ class TripMonitorUltraMinimal {
       }
     }
     
-    const cachedByDriver = this.matchedDrivers.get(normalizedDriverName);
+    const cachedByDriver = this.isMeaningfulDriverName(driverName) ? this.matchedDrivers.get(normalizedDriverName) : null;
     if (cachedByDriver && this.activeTrips.has(cachedByDriver)) {
       return this.activeTrips.get(cachedByDriver);
     }
     
     for (const [tripId, trip] of this.activeTrips) {
-      const tripPlate = this.getVehiclePlateFromAssignments(trip);
-      if (tripPlate && plate && tripPlate.toLowerCase() === plate.toLowerCase()) {
+      const tripPlates = this.getVehiclePlatesFromAssignments(trip);
+      const matchedTripPlate = tripPlates.find((tripPlate) => this.normalizePlate(tripPlate) === normalizedPlate);
+      if (normalizedPlate && matchedTripPlate) {
         this.matchedVehicles.set(normalizedPlate, tripId);
         return trip;
       }
@@ -220,15 +289,23 @@ class TripMonitorUltraMinimal {
     return null;
   }
 
+  normalizePlate(value) {
+    return String(value || '')
+      .trim()
+      .replace(/\s+/g, '')
+      .replace(/[^a-z0-9]/gi, '')
+      .toLowerCase();
+  }
+
+  isMeaningfulDriverName(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return false;
+    return !['engine on', 'engine off', 'unknown', 'null'].includes(normalized);
+  }
+
   getDriverNameFromAssignments(trip) {
-    if (!trip.vehicleassignments) return null;
-    
     try {
-      let assignments = trip.vehicleassignments;
-      if (typeof assignments === 'string') assignments = JSON.parse(assignments);
-      if (!Array.isArray(assignments)) assignments = [assignments];
-      
-      for (const assignment of assignments) {
+      for (const assignment of this.getAllAssignments(trip)) {
         if (!assignment.drivers) continue;
         const drivers = Array.isArray(assignment.drivers) ? assignment.drivers : [assignment.drivers];
         
@@ -269,20 +346,417 @@ class TripMonitorUltraMinimal {
     return null;
   }
 
+  getVehiclePlatesFromAssignments(trip) {
+    const plates = [];
+
+    try {
+      for (const assignment of this.getAllAssignments(trip)) {
+        const plateValue =
+          assignment?.vehicle?.registration_number ||
+          assignment?.vehicle?.plate ||
+          assignment?.vehicle?.name;
+        if (plateValue) {
+          plates.push(String(plateValue).trim());
+        }
+      }
+    } catch (error) {
+      console.error('âŒ Error parsing vehicleassignments for plate:', error.message);
+    }
+
+    return [...new Set(plates)];
+  }
+
+  getVehiclePlateFromAssignments(trip) {
+    return this.getVehiclePlatesFromAssignments(trip)[0] || null;
+  }
+
   namesMatch(epsDriverName, tripDriverName) {
+    if (!this.isMeaningfulDriverName(epsDriverName) || !this.isMeaningfulDriverName(tripDriverName)) {
+      return false;
+    }
     const eps = epsDriverName.toLowerCase();
     const trip = tripDriverName.toLowerCase();
     return eps.includes(trip) || trip.includes(eps);
   }
 
-  updateTripLocationLocal(tripId, latitude, longitude, speed) {
+  getTripFuelState(tripId) {
+    if (!this.tripFuelCache.has(tripId)) {
+      this.tripFuelCache.set(tripId, { entries: {} });
+    }
+    return this.tripFuelCache.get(tripId);
+  }
+
+  toNumber(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const normalized = typeof value === 'string' ? value.replace(/,/g, '.') : value;
+    const num = Number(normalized);
+    return Number.isFinite(num) ? num : null;
+  }
+
+  getEventTimestamp(vehicleData) {
+    return vehicleData?.LocTime || vehicleData?.updated_at || new Date().toISOString();
+  }
+
+  mergeTripState(tripId, updates) {
+    const existing = this.activeTrips.get(tripId);
+    if (!existing) return;
+    this.activeTrips.set(tripId, { ...existing, ...updates });
+  }
+
+  buildFuelBreakdown(tripId) {
+    const state = this.getTripFuelState(tripId);
+    return Object.values(state.entries)
+      .sort((a, b) => String(a.plate || '').localeCompare(String(b.plate || '')))
+      .map((entry) => ({
+        plate: entry.plate,
+        driver: entry.driver,
+        current_fuel_liters: entry.current_fuel_liters,
+        fuel_level_percentage: entry.fuel_level_percentage,
+        start_fuel_liters: entry.start_fuel_liters ?? null,
+        fuel_used_liters: entry.fuel_used_liters ?? 0,
+        mileage: entry.current_mileage ?? null,
+        start_mileage: entry.start_mileage ?? null,
+        last_loc_time: entry.last_loc_time || null,
+        engine_status: entry.engine_status || null,
+        geozone: entry.geozone || null,
+        latitude: entry.latitude ?? null,
+        longitude: entry.longitude ?? null
+      }));
+  }
+
+  getTripWindow(trip) {
+    const startValue = trip?.accepted_at;
+    if (!startValue) return null;
+
+    const statusValue = String(trip?.status || '').toLowerCase();
+    const tripFinished = ['delivered', 'completed'].includes(statusValue);
+    const endValue = tripFinished && trip?.actual_end_time ? trip.actual_end_time : new Date().toISOString();
+    if (!endValue) return null;
+
+    const startAt = new Date(startValue);
+    const endAt = new Date(endValue);
+    if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) return null;
+    if (endAt.getTime() < startAt.getTime()) return null;
+
+    return {
+      startAt,
+      endAt,
+      startIso: startAt.toISOString(),
+      endIso: endAt.toISOString()
+    };
+  }
+
+  calculateOverlapHours(windowStart, windowEnd, sessionStart, sessionEnd) {
+    const overlapStart = Math.max(windowStart.getTime(), sessionStart.getTime());
+    const overlapEnd = Math.min(windowEnd.getTime(), sessionEnd.getTime());
+    const overlapMs = overlapEnd - overlapStart;
+    return overlapMs > 0 ? overlapMs / (1000 * 60 * 60) : 0;
+  }
+
+  async syncTripFuelMetrics(trip, { force = false } = {}) {
+    try {
+      const tripId = trip?.id;
+      if (!tripId) return null;
+
+      const window = this.getTripWindow(trip);
+      if (!window) return null;
+
+      const lastSync = this.tripFuelSyncTimes.get(tripId);
+      if (!force && lastSync && Date.now() - lastSync < 5 * 60 * 1000) {
+        return null;
+      }
+
+      const plates = this.getVehiclePlatesFromAssignments(trip);
+      if (!plates.length) return null;
+
+      const { data: sessions, error } = await this.fuelSupabase
+        .from('energy_rite_operating_sessions')
+        .select('id, branch, session_start_time, session_end_time, session_status, operating_hours, total_usage, total_fill, cost_for_usage')
+        .in('branch', plates)
+        .lte('session_start_time', window.endIso)
+        .order('session_start_time', { ascending: true });
+
+      if (error) {
+        console.error('Fuel sync query failed:', error.message);
+        return null;
+      }
+
+      const liveBreakdown = this.buildFuelBreakdown(tripId);
+      const relevantSessions = (sessions || []).filter((session) => {
+        const sessionStart = new Date(session.session_start_time);
+        const sessionEnd = session.session_end_time ? new Date(session.session_end_time) : window.endAt;
+        if (Number.isNaN(sessionStart.getTime()) || Number.isNaN(sessionEnd.getTime())) {
+          return false;
+        }
+        return sessionEnd.getTime() >= window.startAt.getTime();
+      });
+
+      const breakdown = [];
+      let totalFuelUsed = 0;
+      let totalFuelFilled = 0;
+      let totalOperatingHours = 0;
+      let totalFuelCost = 0;
+
+      for (const plate of plates) {
+        const plateKey = this.normalizePlate(plate);
+        const plateSessions = relevantSessions.filter((session) => this.normalizePlate(session.branch) === plateKey);
+        const operatingSessions = plateSessions.filter((session) =>
+          ['COMPLETED', 'ONGOING'].includes(String(session.session_status || '').toUpperCase())
+        );
+        const fillSessions = plateSessions.filter((session) =>
+          String(session.session_status || '').toUpperCase() === 'FUEL_FILL_COMPLETED'
+        );
+
+        let plateFuelUsed = 0;
+        let plateOperatingHours = 0;
+        let plateFuelCost = 0;
+
+        for (const session of operatingSessions) {
+          const sessionStart = new Date(session.session_start_time);
+          const sessionEnd = session.session_end_time ? new Date(session.session_end_time) : window.endAt;
+          const overlapHours = this.calculateOverlapHours(window.startAt, window.endAt, sessionStart, sessionEnd);
+          if (overlapHours <= 0) continue;
+
+          const sessionHours = this.toNumber(session.operating_hours) || this.calculateOverlapHours(sessionStart, sessionEnd, sessionStart, sessionEnd);
+          const ratio = sessionHours > 0 ? Math.min(1, overlapHours / sessionHours) : 1;
+          const sessionUsage = Math.max(0, this.toNumber(session.total_usage) || 0);
+          const sessionCost = Math.max(0, this.toNumber(session.cost_for_usage) || 0);
+
+          plateFuelUsed += sessionUsage * ratio;
+          plateOperatingHours += overlapHours;
+          plateFuelCost += sessionCost * ratio;
+        }
+
+        const plateFuelFilled = fillSessions.reduce((sum, session) => sum + Math.max(0, this.toNumber(session.total_fill) || 0), 0);
+        const liveEntry = liveBreakdown.find((entry) => this.normalizePlate(entry.plate) === plateKey);
+        const plateDistanceKm = Math.max(
+          0,
+          (this.toNumber(liveEntry?.mileage) || 0) - (this.toNumber(liveEntry?.start_mileage) || 0)
+        );
+        const plateLitersPerHour = plateOperatingHours > 0 ? plateFuelUsed / plateOperatingHours : 0;
+        const plateLitersPerKm = plateDistanceKm > 0 ? plateFuelUsed / plateDistanceKm : 0;
+
+        totalFuelUsed += plateFuelUsed;
+        totalFuelFilled += plateFuelFilled;
+        totalOperatingHours += plateOperatingHours;
+        totalFuelCost += plateFuelCost;
+
+        breakdown.push({
+          plate,
+          session_count: operatingSessions.length,
+          fill_count: fillSessions.length,
+          fuel_used_liters: Number(plateFuelUsed.toFixed(2)),
+          fuel_filled_liters: Number(plateFuelFilled.toFixed(2)),
+          operating_hours: Number(plateOperatingHours.toFixed(2)),
+          distance_km: Number(plateDistanceKm.toFixed(2)),
+          liters_per_hour: Number(plateLitersPerHour.toFixed(4)),
+          liters_per_km: Number(plateLitersPerKm.toFixed(4))
+        });
+      }
+
+      const totalDistanceKm =
+        breakdown.reduce((sum, entry) => sum + (this.toNumber(entry.distance_km) || 0), 0) ||
+        Math.max(0, this.toNumber(trip.total_distance) || 0);
+
+      const payload = {
+        fuel_used_liters: Number(totalFuelUsed.toFixed(2)),
+        fuel_filled_liters: Number(totalFuelFilled.toFixed(2)),
+        fuel_operating_hours: Number(totalOperatingHours.toFixed(2)),
+        fuel_liters_per_hour: totalOperatingHours > 0 ? Number((totalFuelUsed / totalOperatingHours).toFixed(4)) : 0,
+        fuel_liters_per_km: totalDistanceKm > 0 ? Number((totalFuelUsed / totalDistanceKm).toFixed(4)) : 0,
+        fuel_cost_total: Number(totalFuelCost.toFixed(2)),
+        fuel_window_start_at: window.startIso,
+        fuel_window_end_at: window.endIso,
+        fuel_source: 'energy_rite_operating_sessions',
+        fuel_last_updated_at: new Date().toISOString(),
+        fuel_breakdown: breakdown
+      };
+
+      const result = await this.safeUpdateTrip(tripId, payload);
+      if (!result.error) {
+        this.mergeTripState(tripId, payload);
+        this.tripFuelSyncTimes.set(tripId, Date.now());
+        return payload;
+      }
+
+      console.error('Fuel sync write failed:', result.error.message);
+    } catch (error) {
+      console.error('Error syncing trip fuel metrics:', error.message);
+    }
+
+    return null;
+  }
+
+  async safeUpdateTrip(tripId, payload) {
+    let filteredPayload = Object.fromEntries(
+      Object.entries(payload).filter(([key, value]) => value !== undefined && !this.unsupportedTripColumns.has(key))
+    );
+
+    while (Object.keys(filteredPayload).length > 0) {
+      const result = await this.supabase
+        .from('trips')
+        .update(filteredPayload)
+        .eq('id', tripId);
+
+      if (!result.error) {
+        return result;
+      }
+
+      const message = `${result.error.message || ''} ${result.error.details || ''} ${result.error.hint || ''}`;
+      const missingColumns = [];
+      const matchPatterns = [
+        /column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/g,
+        /Could not find the '([a-zA-Z0-9_]+)' column/g,
+        /'([a-zA-Z0-9_]+)' column/g
+      ];
+
+      for (const pattern of matchPatterns) {
+        let match;
+        while ((match = pattern.exec(message)) !== null) {
+          missingColumns.push(match[1]);
+        }
+      }
+
+      const uniqueMissing = [...new Set(missingColumns)];
+      if (uniqueMissing.length === 0) {
+        return result;
+      }
+
+      uniqueMissing.forEach((column) => this.unsupportedTripColumns.add(column));
+      console.warn(`Skipping unsupported trip columns: ${uniqueMissing.join(', ')}`);
+
+      filteredPayload = Object.fromEntries(
+        Object.entries(filteredPayload).filter(([key]) => !this.unsupportedTripColumns.has(key))
+      );
+    }
+
+    return { error: null };
+  }
+
+  async updateTripMonitoringData(trip, vehicleData) {
+    const tripId = trip?.id;
+    if (!tripId) return;
+
+    const latitude = this.toNumber(vehicleData?.Latitude);
+    const longitude = this.toNumber(vehicleData?.Longitude);
+    const speed = this.toNumber(vehicleData?.Speed) ?? 0;
+    const mileage = this.toNumber(vehicleData?.Mileage);
+    const currentFuelLiters = this.toNumber(vehicleData?.fuel_probe_1_volume_in_tank);
+    const fuelLevelPercentage = this.toNumber(vehicleData?.fuel_probe_1_level_percentage);
+    const plate = String(vehicleData?.Plate || '').trim();
+    const eventTimestamp = this.getEventTimestamp(vehicleData);
+    const nowIso = new Date().toISOString();
+
+    this.updateTripLocationLocal(tripId, latitude, longitude, speed, plate, eventTimestamp);
+
+    const state = this.getTripFuelState(tripId);
+    const plateKey = this.normalizePlate(plate) || `trip-${tripId}`;
+    const existingEntry = state.entries[plateKey] || {};
+    const nextEntry = {
+      ...existingEntry,
+      plate: plate || existingEntry.plate || null,
+      driver: vehicleData?.DriverName || existingEntry.driver || null,
+      current_fuel_liters: currentFuelLiters ?? existingEntry.current_fuel_liters ?? null,
+      fuel_level_percentage: fuelLevelPercentage ?? existingEntry.fuel_level_percentage ?? null,
+      current_mileage: mileage ?? existingEntry.current_mileage ?? null,
+      latitude: latitude ?? existingEntry.latitude ?? null,
+      longitude: longitude ?? existingEntry.longitude ?? null,
+      engine_status: vehicleData?.DriverName || existingEntry.engine_status || null,
+      geozone: vehicleData?.Geozone || existingEntry.geozone || null,
+      last_loc_time: eventTimestamp
+    };
+
+    const statusValue = String(trip.status || '').toLowerCase();
+    const tripAccepted = statusValue === 'accepted' || Boolean(trip.accepted_at);
+    if (tripAccepted) {
+      if (nextEntry.start_fuel_liters === undefined && currentFuelLiters !== null) {
+        nextEntry.start_fuel_liters = currentFuelLiters;
+      }
+      if (nextEntry.start_mileage === undefined && mileage !== null) {
+        nextEntry.start_mileage = mileage;
+      }
+    }
+
+    if (nextEntry.start_fuel_liters !== undefined && nextEntry.current_fuel_liters !== null) {
+      nextEntry.fuel_used_liters = Math.max(nextEntry.start_fuel_liters - nextEntry.current_fuel_liters, 0);
+    }
+
+    state.entries[plateKey] = nextEntry;
+
+    const breakdown = this.buildFuelBreakdown(tripId);
+    const totalCurrentFuel = breakdown.reduce((sum, entry) => sum + (this.toNumber(entry.current_fuel_liters) ?? 0), 0);
+    const totalStartFuel = breakdown.reduce((sum, entry) => sum + (this.toNumber(entry.start_fuel_liters) ?? 0), 0);
+    const totalFuelUsed = breakdown.reduce((sum, entry) => sum + (this.toNumber(entry.fuel_used_liters) ?? 0), 0);
+    const percentageEntries = breakdown.map((entry) => this.toNumber(entry.fuel_level_percentage)).filter((value) => value !== null);
+    const averageFuelPct = percentageEntries.length > 0
+      ? percentageEntries.reduce((sum, value) => sum + value, 0) / percentageEntries.length
+      : null;
+
+    const updateData = {
+      current_latitude: latitude,
+      current_longitude: longitude,
+      current_speed: speed,
+      last_location_update: eventTimestamp,
+      updated_at: nowIso,
+      current_fuel_liters: totalCurrentFuel,
+      fuel_level_percentage: averageFuelPct !== null ? Number(averageFuelPct.toFixed(2)) : null,
+      fuel_used_liters: totalFuelUsed,
+      fuel_last_updated_at: eventTimestamp,
+      fuel_breakdown: breakdown
+    };
+
+    if (!tripAccepted) {
+      updateData.start_fuel_liters = null;
+      updateData.fuel_used_liters = 0;
+      updateData.fuel_window_start_at = null;
+      updateData.fuel_window_end_at = null;
+      updateData.fuel_liters_per_hour = 0;
+      updateData.fuel_liters_per_km = 0;
+      updateData.fuel_filled_liters = 0;
+      updateData.fuel_cost_total = 0;
+    }
+
+    if (tripAccepted) {
+      if (!trip.accepted_at) {
+        updateData.accepted_at = eventTimestamp;
+      }
+      if (!trip.actual_start_time) {
+        updateData.actual_start_time = eventTimestamp;
+      }
+      if (trip.start_mileage === null || trip.start_mileage === undefined) {
+        updateData.start_mileage = mileage;
+      }
+      if (totalStartFuel > 0) {
+        updateData.start_fuel_liters = totalStartFuel;
+      }
+    }
+
+    if (mileage !== null) {
+      updateData.end_mileage = mileage;
+      const baseMileage = this.toNumber(trip.start_mileage) ?? this.toNumber(nextEntry.start_mileage);
+      if (baseMileage !== null) {
+        updateData.total_distance = Math.max(mileage - baseMileage, 0);
+      }
+    }
+
+    const result = await this.safeUpdateTrip(tripId, updateData);
+    if (!result.error) {
+      this.mergeTripState(tripId, updateData);
+      await this.syncTripFuelMetrics(this.activeTrips.get(tripId) || trip);
+    } else {
+      console.error('âŒ Error writing trip monitoring data:', result.error.message);
+    }
+  }
+
+  updateTripLocationLocal(tripId, latitude, longitude, speed, plate = null, datetime = null) {
     try {
       const newPoint = {
         lat: latitude,
         lng: longitude,
         speed: speed,
         timestamp: Math.floor(Date.now() / 1000),
-        datetime: new Date().toISOString()
+        datetime: datetime || new Date().toISOString(),
+        plate
       };
       
       const existing = this.db.prepare('SELECT route_points FROM trip_routes WHERE trip_id = ?').get(tripId);
@@ -292,9 +766,11 @@ class TripMonitorUltraMinimal {
         points.push(newPoint);
         this.db.prepare('UPDATE trip_routes SET route_points = ?, updated_at = ? WHERE trip_id = ?')
           .run(JSON.stringify(points), new Date().toISOString(), tripId);
+        console.log(`[${this.company.toUpperCase()}] Stored route point for trip ${tripId} (${plate || 'no-plate'}) -> ${latitude}, ${longitude} | total ${points.length}`);
       } else {
         this.db.prepare('INSERT INTO trip_routes (trip_id, company, route_points, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
           .run(tripId, this.company, JSON.stringify([newPoint]), new Date().toISOString(), new Date().toISOString());
+        console.log(`[${this.company.toUpperCase()}] Created route history for trip ${tripId} (${plate || 'no-plate'}) -> ${latitude}, ${longitude}`);
       }
     } catch (error) {
       console.error('❌ Error updating trip location:', error.message);
@@ -604,6 +1080,20 @@ class TripMonitorUltraMinimal {
         if (dist <= 700) {
           if (!arrivalTime) {
             this.destinationAlerts.set(destinationKey, Date.now());
+            const breakdown = this.buildFuelBreakdown(trip.id);
+            const totalCurrentFuel = breakdown.reduce((sum, entry) => sum + (this.toNumber(entry.current_fuel_liters) ?? 0), 0);
+            const timestamp = new Date().toISOString();
+            const updateData = {
+              actual_end_time: trip.actual_end_time || timestamp,
+              end_fuel_liters: totalCurrentFuel > 0 ? totalCurrentFuel : undefined,
+              fuel_used_liters: breakdown.reduce((sum, entry) => sum + (this.toNumber(entry.fuel_used_liters) ?? 0), 0),
+              updated_at: timestamp
+            };
+            const result = await this.safeUpdateTrip(trip.id, updateData);
+            if (!result.error) {
+              this.mergeTripState(trip.id, updateData);
+              await this.syncTripFuelMetrics(this.activeTrips.get(trip.id) || trip, { force: true });
+            }
             console.log(`🎯 AT DESTINATION: Trip ${trip.id} - ${Math.round(dist)}m from ${address}`);
           } else {
             const duration = Date.now() - arrivalTime;

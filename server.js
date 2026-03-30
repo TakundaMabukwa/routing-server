@@ -153,9 +153,10 @@ const mayseneRewardSystem = new MayseneRewardSystem();
 
 // Initialize Trip Monitors per company
 const tripMonitors = {
-  eps: new TripMonitor('eps'),
+  waterford: new TripMonitor('waterford'),
   maysene: new TripMonitor('maysene')
 };
+tripMonitors.eps = tripMonitors.waterford;
 
 // Initialize High Risk Monitor for EPS only
 const highRiskMonitor = new HighRiskMonitor('eps');
@@ -168,9 +169,10 @@ const borderMonitor = new BorderMonitor('eps');
 
 // Initialize Status Monitors per company
 const statusMonitors = {
-  eps: new StatusMonitor('eps'),
+  waterford: new StatusMonitor('waterford'),
   maysene: new StatusMonitor('maysene')
 };
+statusMonitors.eps = statusMonitors.waterford;
 
 // Initialize C-Track Poller for EPS
 let ctrackPoller = null;
@@ -205,6 +207,7 @@ function setupWebSocket(company, ws) {
   ws.on('message', async (data) => {
   try {
     const vehicleData = JSON.parse(data.toString());
+    const trackingCompany = company === 'eps' ? 'waterford' : company;
     
     // Log raw WebSocket data
     // console.log(`\n[${company.toUpperCase()}] RAW DATA:`, JSON.stringify(vehicleData, null, 2));
@@ -272,7 +275,7 @@ function setupWebSocket(company, ws) {
     if (vehicleData.DriverName && vehicleData.Latitude && vehicleData.Longitude) {
       try {
         const monitor = company === 'eps' ? borderMonitor : null;
-        activeTripId = await tripMonitors[company].processVehicleData(vehicleData, monitor);
+        activeTripId = await tripMonitors[trackingCompany].processVehicleData(vehicleData, monitor);
       } catch (error) {
         console.error('Error processing trip monitoring data:', error);
       }
@@ -379,7 +382,7 @@ app.use('/api/ctrack', ctrackRoutes);
 // Get trip route points by trip ID (with company parameter)
 app.get('/api/trips/:tripId/route', async (req, res) => {
   const tripId = parseInt(req.params.tripId);
-  const company = req.query.company || 'eps';
+  const company = req.query.company || 'waterford';
   
   if (!tripMonitors[company]) {
     return res.status(400).json({ error: 'Invalid company' });
@@ -416,7 +419,7 @@ app.get('/api/trips/:tripId/route', async (req, res) => {
 // Get unauthorized stops for a trip (from local DB)
 app.get('/api/trips/:tripId/unauthorized-stops', (req, res) => {
   const tripId = parseInt(req.params.tripId);
-  const company = req.query.company || 'eps';
+  const company = req.query.company || 'waterford';
   
   if (!tripMonitors[company]) {
     return res.status(400).json({ error: 'Invalid company' });
@@ -616,7 +619,7 @@ app.get('/vehicles', (req, res) => {
 
 // Get all trip routes (optional - for debugging)
 app.get('/api/trips/routes/all', (req, res) => {
-  const company = req.query.company || 'eps';
+  const company = req.query.company || 'waterford';
   
   if (!tripMonitors[company]) {
     return res.status(400).json({ error: 'Invalid company' });

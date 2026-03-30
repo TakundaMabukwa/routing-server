@@ -3,12 +3,18 @@ const { createClient } = require('@supabase/supabase-js');
 class StatusMonitor {
   constructor(company = 'eps') {
     this.company = company;
-    const supabaseUrl = company === 'maysene' 
+    const isMaysene = company === 'maysene';
+    const isWaterford = company === 'waterford';
+    const supabaseUrl = isMaysene
       ? process.env.NEXT_PUBLIC_MAYSENE_SUPABASE_URL
-      : process.env.NEXT_PUBLIC_EPS_SUPABASE_URL;
-    const supabaseKey = company === 'maysene'
+      : isWaterford
+        ? process.env.NEXT_PUBLIC_WATERFORD_SUPABASE_URL || process.env.NEXT_PUBLIC_EPS_SUPABASE_URL
+        : process.env.NEXT_PUBLIC_EPS_SUPABASE_URL;
+    const supabaseKey = isMaysene
       ? process.env.NEXT_PUBLIC_MAYSENE_SUPABASE_ANON_KEY
-      : process.env.NEXT_PUBLIC_EPS_SUPABASE_ANON_KEY;
+      : isWaterford
+        ? process.env.NEXT_PUBLIC_WATERFORD_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_EPS_SUPABASE_ANON_KEY
+        : process.env.NEXT_PUBLIC_EPS_SUPABASE_ANON_KEY;
     
     this.supabase = createClient(supabaseUrl, supabaseKey);
     this.statusTimestamps = new Map();
@@ -75,19 +81,66 @@ class StatusMonitor {
     console.log(`📝 Trip ${tripId} status changed to: ${newStatus}`);
   }
 
+  getAllAssignments(trip) {
+    const parseAssignments = (value) => {
+      if (!value) return [];
+      let assignments = value;
+      if (typeof assignments === 'string') {
+        assignments = JSON.parse(assignments);
+      }
+      if (!Array.isArray(assignments)) {
+        assignments = [assignments];
+      }
+      return assignments.filter(Boolean);
+    };
+
+    return [
+      ...parseAssignments(trip.vehicleassignments),
+      ...parseAssignments(trip.handed_vehicleassignments)
+    ];
+  }
+
+  getPrimaryDriverAndPlate(trip) {
+    let driverName = 'Unknown';
+    let plate = 'Unknown';
+
+    for (const assignment of this.getAllAssignments(trip)) {
+      const drivers = Array.isArray(assignment.drivers) ? assignment.drivers : [assignment.drivers].filter(Boolean);
+      if (drivers.length > 0 && driverName === 'Unknown') {
+        const driver = drivers[0];
+        driverName =
+          driver?.name ||
+          driver?.surname ||
+          driver?.first_name ||
+          driverName;
+      }
+
+      const vehiclePlate =
+        assignment?.vehicle?.registration_number ||
+        assignment?.vehicle?.plate ||
+        assignment?.vehicle?.name;
+      if (vehiclePlate && plate === 'Unknown') {
+        plate = vehiclePlate;
+      }
+    }
+
+    return { driverName, plate };
+  }
+
   async checkAllStatuses() {
     try {
       const { data: trips } = await this.supabase
         .from('trips')
-        .select('id, status, status_history, vehicleassignments, updated_at')
-        .not('status', 'in', '(delivered,on-trip)');
+        .select('id, status, status_history, vehicleassignments, handed_vehicleassignments, updated_at, created_at, accepted_at, late_acceptance, late_arrival')
+        .not('status', 'in', '(delivered,on-trip,completed,cancelled,Delivered,On-Trip,Completed,Cancelled)');
       
       if (!trips) return;
       
       const now = Date.now();
       
       for (const trip of trips) {
-        const limit = this.STATUS_LIMITS[trip.status];
+        const statusKey = String(trip.status || '').toLowerCase();
+        const limit = this.STATUS_LIMITS[statusKey];
         if (!limit) continue;
         
         // Get status timestamp
@@ -117,11 +170,69 @@ class StatusMonitor {
         const duration = now - statusTimestamp;
         
         if (duration >= limit) {
+          if (statusKey === 'pending' && !trip.late_acceptance) {
+            await this.flagSpecificDelay(trip, duration, 'late_acceptance', 'Driver has not accepted trip');
+            continue;
+          }
+
+          if (statusKey === 'accepted' && !trip.late_arrival) {
+            await this.flagSpecificDelay(trip, duration, 'late_arrival', 'Driver has not arrived at loading location');
+            continue;
+          }
+
           await this.flagStatusDelay(trip, duration);
         }
       }
     } catch (error) {
       console.error('❌ Error checking statuses:', error.message);
+    }
+  }
+
+  async flagSpecificDelay(trip, duration, flagKey, reason) {
+    const alertKey = `${flagKey}:${trip.id}`;
+    if (this.alertedTrips.has(alertKey)) return;
+
+    const durationMinutes = Math.round(duration / 60000);
+    const timestamp = new Date().toISOString();
+    const { driverName, plate } = this.getPrimaryDriverAndPlate(trip);
+
+    try {
+      const { data: tripData } = await this.supabase
+        .from('trips')
+        .select('alert_message')
+        .eq('id', trip.id)
+        .single();
+
+      let alerts = tripData?.alert_message || [];
+      if (!Array.isArray(alerts)) {
+        alerts = [];
+      }
+
+      alerts.push({
+        type: flagKey,
+        message: `${reason} (${durationMinutes} minutes)`,
+        status: trip.status,
+        duration_minutes: durationMinutes,
+        reason,
+        driver: driverName,
+        vehicle: plate,
+        timestamp
+      });
+
+      await this.supabase
+        .from('trips')
+        .update({
+          [flagKey]: true,
+          alert_type: flagKey,
+          alert_message: alerts,
+          alert_timestamp: timestamp,
+          updated_at: timestamp
+        })
+        .eq('id', trip.id);
+
+      this.alertedTrips.set(alertKey, Date.now());
+    } catch (error) {
+      console.error('âŒ Error flagging specific status delay:', error.message);
     }
   }
 
@@ -137,36 +248,16 @@ class StatusMonitor {
       const timestamp = new Date().toISOString();
       const { data: tripData } = await this.supabase
         .from('trips')
-        .select('alert_message, vehicleassignments')
+        .select('alert_message')
         .eq('id', trip.id)
         .single();
       
-      const alerts = tripData?.alert_message || [];
-      
-      // Get driver/vehicle info
-      let driverName = 'Unknown';
-      let plate = 'Unknown';
-      
-      if (tripData?.vehicleassignments) {
-        const assignments = typeof tripData.vehicleassignments === 'string' 
-          ? JSON.parse(tripData.vehicleassignments) 
-          : tripData.vehicleassignments;
-        
-        const assignmentArray = Array.isArray(assignments) ? assignments : [assignments];
-        
-        for (const assignment of assignmentArray) {
-          if (assignment.drivers) {
-            const drivers = Array.isArray(assignment.drivers) ? assignment.drivers : [assignment.drivers];
-            const driver = drivers[0];
-            if (driver && driver.name) {
-              driverName = driver.name;
-            }
-          }
-          if (assignment.vehicle && assignment.vehicle.name) {
-            plate = assignment.vehicle.name;
-          }
-        }
+      let alerts = tripData?.alert_message || [];
+      if (!Array.isArray(alerts)) {
+        alerts = [];
       }
+
+      const { driverName, plate } = this.getPrimaryDriverAndPlate(trip);
       
       alerts.push({
         type: 'status_delay',
