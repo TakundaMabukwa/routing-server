@@ -21,6 +21,13 @@ const path = require('path');
 const Database = require('better-sqlite3');
 const { WebSocketServer } = require('ws');
 const BACKUP_VEHICLES_ENDPOINT = process.env.TCP_BASE_URL || 'http://64.227.138.235:3000/api/maysene-vehicles';
+const EPS_WEBSOCKET_ENDPOINT =
+  process.env.EPS_WEBSOCKET_URL_LIVE ||
+  process.env.EPS_WEBSOCKET_URL ||
+  process.env.EPS_WEBSOCKET_URL_2017_FEED;
+const MAYSENE_WEBSOCKET_ENDPOINT =
+  process.env.MAYSENE_WEBSOCKET_URL_LIVE ||
+  process.env.MAYSENE_WEBSOCKET_URL;
 
 // Middleware
 app.use(express.json());
@@ -193,13 +200,31 @@ if (process.env.CTRACK_USERNAME && process.env.CTRACK_PASSWORD) {
   console.log('⚠️ C-Track credentials not found, skipping C-Track integration');
 }
 
+function createCompanyWebSocket(company, url) {
+  if (!url) {
+    console.warn(`⚠️ ${company.toUpperCase()} WebSocket URL not configured, skipping live feed connection`);
+    return null;
+  }
+
+  try {
+    return new WebSocket(url);
+  } catch (error) {
+    console.error(`Failed to initialize ${company.toUpperCase()} WebSocket:`, error.message);
+    return null;
+  }
+}
+
 // WebSocket connections per company
 const websockets = {
-  eps: new WebSocket(process.env.EPS_WEBSOCKET_URL_2017_FEED),
-  maysene: new WebSocket(process.env.MAYSENE_WEBSOCKET_URL)
+  eps: createCompanyWebSocket('eps', EPS_WEBSOCKET_ENDPOINT),
+  maysene: createCompanyWebSocket('maysene', MAYSENE_WEBSOCKET_ENDPOINT)
 };
 
 function setupWebSocket(company, ws) {
+  if (!ws) {
+    return;
+  }
+
   ws.on('open', () => {
     console.log(`${company.toUpperCase()} WebSocket connected`);
   });
