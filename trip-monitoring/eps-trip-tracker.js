@@ -1,5 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
-const axios = require('axios');
+const { getJson } = require('../services/http-client');
 
 class EPSTripTracker {
   constructor() {
@@ -791,15 +791,15 @@ class EPSTripTracker {
     try {
       if (!this.MAPBOX_TOKEN || !address) return null;
       
-      const response = await axios.get(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json`, {
+      const data = await getJson(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json`, {
         params: {
           access_token: this.MAPBOX_TOKEN,
           limit: 1
         }
       });
       
-      if (response.data.features && response.data.features.length > 0) {
-        const [lng, lat] = response.data.features[0].center;
+      if (data.features && data.features.length > 0) {
+        const [lng, lat] = data.features[0].center;
         return { lat, lng };
       }
       

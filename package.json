@@ -12,7 +12,6 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.79.0",
     "@turf/distance": "^7.1.0",
-    "axios": "^1.13.2",
     "better-sqlite3": "^12.4.1",
     "dotenv": "^16.3.1",
     "exceljs": "^4.4.0",

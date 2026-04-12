@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
+const { getJson } = require('../services/http-client');
 
 let ctrackPoller = null;
 
@@ -62,12 +63,9 @@ router.get('/drivers/all', async (req, res) => {
 
   try {
     const drivers = await ctrackPoller.client.getAllDrivers();
-    if (!drivers) {
-      return res.status(500).json({ error: 'Failed to fetch drivers from C-Track API' });
-    }
     res.json(drivers);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(error.status || 500).json({ error: error.message, details: error.data });
   }
 });
 
@@ -141,23 +139,19 @@ router.get('/api/raw/*', async (req, res) => {
   try {
     const endpoint = req.params[0];
     await ctrackPoller.client.ensureAuthenticated();
-    
-    const axios = require('axios');
-    const response = await axios.get(
-      `${ctrackPoller.client.baseURL}/${endpoint}`,
-      {
-        headers: {
-          'Accept': 'application/json',
-          'Ocp-Apim-Subscription-Key': ctrackPoller.client.subscriptionKey,
-          'x-token': ctrackPoller.client.token,
-          'x-tenant': ctrackPoller.client.tenantId
-        }
+
+    const data = await getJson(`${ctrackPoller.client.baseURL}/${endpoint}`, {
+      headers: {
+        'Accept': 'application/json',
+        'Ocp-Apim-Subscription-Key': ctrackPoller.client.subscriptionKey,
+        'x-token': ctrackPoller.client.token,
+        'x-tenant': ctrackPoller.client.tenantId
       }
-    );
-    
-    res.json(response.data);
+    });
+
+    res.json(data);
   } catch (error) {
-    res.status(500).json({ error: error.message, details: error.response?.data });
+    res.status(error.status || 500).json({ error: error.message, details: error.data });
   }
 });
 

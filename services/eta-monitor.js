@@ -1,4 +1,4 @@
-const axios = require('axios');
+const { getJson } = require('./http-client');
 
 class ETAMonitor {
   constructor() {
@@ -15,15 +15,15 @@ class ETAMonitor {
     
     try {
       const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json`;
-      const response = await axios.get(url, {
+      const data = await getJson(url, {
         params: {
           access_token: this.mapboxToken,
           limit: 1
         }
       });
       
-      if (response.data.features && response.data.features.length > 0) {
-        const coords = response.data.features[0].center;
+      if (data.features && data.features.length > 0) {
+        const coords = data.features[0].center;
         const result = { lng: coords[0], lat: coords[1] };
         this.geocodeCache.set(address, result);
         return result;
@@ -47,7 +47,7 @@ class ETAMonitor {
 
       // Use Mapbox Directions API with traffic profile for maximum accuracy
       const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${vehicleLng},${vehicleLat};${destinationLng},${destinationLat}`;
-      const response = await axios.get(url, {
+      const data = await getJson(url, {
         params: {
           access_token: this.mapboxToken,
           geometries: 'geojson',
@@ -57,11 +57,11 @@ class ETAMonitor {
         }
       });
 
-      if (!response.data.routes || response.data.routes.length === 0) {
+      if (!data.routes || data.routes.length === 0) {
         return null;
       }
 
-      const route = response.data.routes[0];
+      const route = data.routes[0];
       const durationSeconds = route.duration;
       const distanceMeters = route.distance;
 

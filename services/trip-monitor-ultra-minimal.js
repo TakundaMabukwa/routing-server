@@ -1,4 +1,3 @@
-const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 const distance = require('@turf/distance').default;
 const { point } = require('@turf/helpers');

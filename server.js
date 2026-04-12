@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const WebSocket = require('ws');
-const axios = require('axios');
+const { getJson } = require('./services/http-client');
 const rewardSystem = require('./reward-system/eps-reward-system-singleton');
 const epsRoutes = require('./reward-system/eps-rewards');
 const mayseneRoutes = require('./reward-system/maysene-rewards');
@@ -144,8 +144,8 @@ function toLocationFromBackupVehicle(vehicle) {
 
 async function fetchVehicleFromBackupApi(plate) {
   try {
-    const response = await axios.get(BACKUP_VEHICLES_ENDPOINT, { timeout: 12000 });
-    const vehicles = getBackupVehicles(response.data);
+    const payload = await getJson(BACKUP_VEHICLES_ENDPOINT, { timeout: 12000 });
+    const vehicles = getBackupVehicles(payload);
     const vehicle = findBackupVehicleByPlate(vehicles, plate);
     return toLocationFromBackupVehicle(vehicle);
   } catch (error) {
