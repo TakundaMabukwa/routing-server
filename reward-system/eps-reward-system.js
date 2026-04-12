@@ -995,7 +995,9 @@ class EPSRewardSystem {
     const isSpeedingMessage = hasEventToken([
       'SAFETY - SPEEDING',
       'SAFETY-SPEEDING',
-      'SPEEDING'
+      'SPEEDING',
+      'SPEED EXCEPTION 1',
+      'SPEED EXCEPTION 2'
     ]);
     if (isSpeedingMessage) {
       driverState.speed_violations_count++;
@@ -1026,7 +1028,11 @@ class EPSRewardSystem {
     const isHarshBrakingMessage = hasEventToken([
       'SAFETY - HARSH BRAKING',
       'SAFETY-HARSH BRAKING',
-      'HARSH BRAKING'
+      'HARSH BRAKING',
+      'SAFETY - BRAKING - AGGRESSIVE',
+      'SAFETY - BRAKING - DANGEROUS',
+      'BRAKING - AGGRESSIVE',
+      'BRAKING - DANGEROUS'
     ]);
     if (isHarshBrakingMessage) {
       driverState.harsh_braking_count++;
@@ -1079,6 +1085,34 @@ class EPSRewardSystem {
         daily_count: driverState.daily_night_count,
         points_remaining: driverState.current_points,
         penalty_applied: nightPenaltyApplied
+      });
+    }
+
+    // Acceleration events come through the status fields and feed into the generic "other" bucket.
+    const isAccelerationMessage = hasEventToken([
+      'SAFETY - ACCELERATION - AGGRESSIVE',
+      'SAFETY - ACCELERATION - DANGEROUS',
+      'ACCELERATION - AGGRESSIVE',
+      'ACCELERATION - DANGEROUS'
+    ]);
+    if (isAccelerationMessage) {
+      driverState.other_violations_count++;
+
+      let otherPenaltyApplied = false;
+      if (!penaltyAppliedThisMessage && driverState.other_violations_count > this.VIOLATION_THRESHOLDS.OTHER) {
+        driverState.current_points = Math.max(0, driverState.current_points - this.POINTS_PER_VIOLATION);
+        driverState.points_deducted++;
+        penaltyAppliedThisMessage = true;
+        otherPenaltyApplied = true;
+      }
+
+      violations.push({
+        type: 'acceleration_violation',
+        category: 'OTHER',
+        status: epsData.Status,
+        violation_count: driverState.other_violations_count,
+        points_remaining: driverState.current_points,
+        penalty_applied: otherPenaltyApplied
       });
     }
 
